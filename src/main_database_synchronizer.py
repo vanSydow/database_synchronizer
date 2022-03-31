@@ -75,6 +75,7 @@ class DBConnectionGUI:
         self.create_lables_connection_window(src_dst)
         self.create_elements_connection_window()
         self.add_to_grid_connection_window(self.offset)
+        self.write_default_connection_values(src_dst)
 
 
     def create_lables_connection_window(self, src_dst):
@@ -109,6 +110,21 @@ class DBConnectionGUI:
         self.test_connection_button.grid(row=5, column=0+offset)
 
 
+    def write_default_connection_values(self, src_dst):
+        try:
+            with open('../util/default_databases.json', 'r') as file:
+                login_data = json.load(file)
+
+            self.db_dropdown.set(login_data[src_dst]['db_type'])
+            self.host_input.insert(0, login_data[src_dst]['host'])
+            self.database_name_input.insert(0, login_data[src_dst]['db_name'])
+            self.user_input.insert(0, login_data[src_dst]['username'])
+            self.password_input.insert(0, login_data[src_dst]['password'])
+
+        except Exception:
+            traceback.print_exc()
+
+
     def test_connection(self):
         try:
             # print(self.db_dropdown.get())
@@ -123,8 +139,8 @@ class DBConnectionGUI:
                 print('database driver invalid')
 
             engine = create_engine(f'{db_driver}://{self.user_input.get()}:{self.password_input.get()}@{self.host_input.get()}/{self.database_name_input.get()}',
-                                   connect_args={'connect_timeout': 3})
-            connection = engine.connect()
+                                   connect_args={'connect_timeout': 3}).connect()
+            # connection = engine.connect()
             messagebox.showinfo('Connection Test', 'Connection test successful :)')
 
         except Exception:
@@ -143,9 +159,6 @@ if __name__ == '__main__':
 
         root.mainloop()
 
-        # with open('../util/database_login_data.json', 'r') as file:
-        #     login_data = json.load(file)
-        #
         # source_db = DBConnector()
         # source_db.connect_to_db('mysql+pymysql', login_data['username'], login_data['password'], login_data['host'], 'gym')
         # destination_db = DBConnector()
