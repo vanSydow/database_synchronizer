@@ -6,6 +6,7 @@ import tkinter as tk
 from tkinter import ttk
 from tkinter import messagebox
 
+
 # pip install SQLAlchemy
 # pip install PyMySQL
 
@@ -21,23 +22,27 @@ class App():
         root.title('Database Synchronizer')
         root.geometry('600x300')
 
-        db_connector = DBConnector()
+        source_db_connector = DBConnector()
+        destination_db_connector = DBConnector()
         source_frame = DBConnectionFrame(root, 'Source')
         destination_frame = DBConnectionFrame(root, 'Destination')
-        compare_frame = CompareFrame(root, db_connector, source_frame, destination_frame)
+        compare_frame = CompareFrame(root, source_db_connector, destination_db_connector, source_frame, destination_frame)
 
 
 class DBConnector:
+    def __init__(self):
+        self.table_structures = []
+        self.view_structures = []
+
     def connect_to_db(self, db_driver, user, password, host, database):
+        self.db_driver = db_driver
+        self.user = user
+        self.password = password
+        self.host = host
+        self.database = database
         try:
-            self.db_driver = db_driver
-            self.user = user
-            self.password = password
-            self.host = host
-            self.database = database
             self.connection_string = f'{db_driver}://{user}:{password}@{host}/{database}'
             self.engine = create_engine(self.connection_string)
-            print(f'connect_to_db: {self.connection_string}')
 
         except Exception:
             messagebox.showerror('Database Connection Error', 'Connecting to database failed :(')
@@ -50,38 +55,35 @@ class DBConnector:
 
     def get_table_structures(self):
         # get tables and views list
-        print(f'get_table_structures: {self.connection_string}')
         query_result_tables = self.execute_statement(f'show full tables from {self.database};')
         tables = [row[0] for row in query_result_tables if row[1] == 'BASE TABLE']
         views = [row[0] for row in query_result_tables if row[1] == 'VIEW']
 
         # get tables structure
-        self.table_structures = []
         for table in tables:
             query_result_columns = self.execute_statement(f'show full columns from {table};')
             columns = [(row[0], row[1]) for row in query_result_columns]
             self.table_structures.append((table, columns))
 
         # get views structure
-        self.view_structures = []
         for view in views:
             query_result_columns = self.execute_statement(f'show full columns from {view};')
             columns = [(row[0], row[1]) for row in query_result_columns]
             self.view_structures.append((table, columns))
 
-    def print_table_structures(self):
-        print(f'\n### {self.database} ###')
-        print('--- table structures ---')
-        for table in self.table_structures:
-            print(f'table name: {table[0]}')
-            for column in table[1]:
-                print(f'- {column[0]} ({column[1]})')
-
-        print('\n--- view structures ---')
-        for view in self.view_structures:
-            print(f'view name: {view[0]}')
-            for column in view[1]:
-                print(f'- {column[0]} ({column[1]})')
+    # def print_table_structures(self):
+    #     print(f'\n### {self.database} ###')
+    #     print('--- table structures ---')
+    #     for table in self.table_structures:
+    #         print(f'table name: {table[0]}')
+    #         for column in table[1]:
+    #             print(f'- {column[0]} ({column[1]})')
+    #
+    #     print('\n--- view structures ---')
+    #     for view in self.view_structures:
+    #         print(f'view name: {view[0]}')
+    #         for column in view[1]:
+    #             print(f'- {column[0]} ({column[1]})')
 
 
 class DBConnectionFrame:
@@ -160,36 +162,54 @@ class DBConnectionFrame:
 
 
 class CompareFrame:
-    def __init__(self, root, db_connector, source_frame, destination_frame):
-        self.source_db = db_connector
-        self.destination_db = db_connector
+    def __init__(self, root, source_db_connector, destination_db_connector, source_frame, destination_frame):
         self.frame = tk.Frame(root, width=600, height=100)
         self.frame.pack(side='bottom')
-        self.compare_db_button = ttk.Button(self.frame, text='Compare Databases', command=lambda:self.compare_db(source_frame, destination_frame))
+        self.compare_db_button = ttk.Button(self.frame, text='Compare Databases',
+                                            command=lambda:self.compare_db(source_db_connector, destination_db_connector, source_frame, destination_frame))
         self.compare_db_button.grid(row=0, column=0)
 
-    def compare_db(self, source_frame, destination_frame):
+    def compare_db(self, source_db_connector, destination_db_connector, source_frame, destination_frame):
         if source_frame.db_dropdown.get() == maria_db: self.source_db_driver = 'mysql+pymysql'
         # TODO: add other database drivers
         if destination_frame.db_dropdown.get() == maria_db: self.destination_db_driver = 'mysql+pymysql'
         # TODO: add other database drivers
 
-        self.source_db.connect_to_db(self.source_db_driver,
+        source_db_connector.connect_to_db(self.source_db_driver,
                                      source_frame.user_input.get(),
                                      source_frame.password_input.get(),
                                      source_frame.host_input.get(),
                                      source_frame.database_name_input.get())
-        self.destination_db.connect_to_db(self.destination_db_driver,
+        destination_db_connector.connect_to_db(self.destination_db_driver,
                                           destination_frame.user_input.get(),
                                           destination_frame.password_input.get(),
                                           destination_frame.host_input.get(),
                                           destination_frame.database_name_input.get())
 
-        self.source_db.get_table_structures()
-        self.destination_db.get_table_structures()
-        self.source_db.print_table_structures()
-        self.destination_db.print_table_structures()
+        source_db_connector.get_table_structures()
+        destination_db_connector.get_table_structures()
 
+        self.source_table_structures = source_db_connector.table_structures
+        self.source_view_structures = source_db_connector.view_structures
+        self.destination_table_structures = destination_db_connector.table_structures
+        self.destination_view_structures = destination_db_connector.view_structures
+        
+        self.print_table_structures(source_db_connector.database, self.source_table_structures, self.source_view_structures)
+        self.print_table_structures(destination_db_connector.database, self.destination_table_structures, self.destination_view_structures)
+
+    def print_table_structures(self, database_name, table_structures, view_structures):
+        print(f'\n### {database_name} ###')
+        print('--- table structures ---')
+        for table in table_structures:
+            print(f'table name: {table[0]}')
+            for column in table[1]:
+                print(f'- {column[0]} ({column[1]})')
+
+        print('\n--- view structures ---')
+        for view in view_structures:
+            print(f'view name: {view[0]}')
+            for column in view[1]:
+                print(f'- {column[0]} ({column[1]})')
 
 
 if __name__ == '__main__':
