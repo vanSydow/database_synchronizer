@@ -26,7 +26,9 @@ class App():
         destination_db_connector = DBConnector()
         source_frame = DBConnectionFrame(root, 'Source')
         destination_frame = DBConnectionFrame(root, 'Destination')
-        compare_frame = CompareFrame(root, source_db_connector, destination_db_connector, source_frame, destination_frame)
+        result_frame = ResultFrame(root)
+        compare_frame = CompareFrame(root, source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame)
+
 
 
 class DBConnector:
@@ -70,20 +72,6 @@ class DBConnector:
             query_result_columns = self.execute_statement(f'show full columns from {view};')
             columns = [(row[0], row[1]) for row in query_result_columns]
             self.view_structures.append((table, columns))
-
-    # def print_table_structures(self):
-    #     print(f'\n### {self.database} ###')
-    #     print('--- table structures ---')
-    #     for table in self.table_structures:
-    #         print(f'table name: {table[0]}')
-    #         for column in table[1]:
-    #             print(f'- {column[0]} ({column[1]})')
-    #
-    #     print('\n--- view structures ---')
-    #     for view in self.view_structures:
-    #         print(f'view name: {view[0]}')
-    #         for column in view[1]:
-    #             print(f'- {column[0]} ({column[1]})')
 
 
 class DBConnectionFrame:
@@ -162,14 +150,28 @@ class DBConnectionFrame:
 
 
 class CompareFrame:
-    def __init__(self, root, source_db_connector, destination_db_connector, source_frame, destination_frame):
+    def __init__(self, root, source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame):
         self.frame = tk.Frame(root, width=600, height=100)
         self.frame.pack(side='bottom')
         self.compare_db_button = ttk.Button(self.frame, text='Compare Databases',
-                                            command=lambda:self.compare_db(source_db_connector, destination_db_connector, source_frame, destination_frame))
+                                            command=lambda:self.compare_db(source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame))
         self.compare_db_button.grid(row=0, column=0)
 
-    def compare_db(self, source_db_connector, destination_db_connector, source_frame, destination_frame):
+    def print_table_structures(self, database_name, table_structures, view_structures):
+        print(f'\n### {database_name} ###')
+        print('--- table structures ---')
+        for table in table_structures:
+            print(f'table name: {table[0]}')
+            for column in table[1]:
+                print(f'- {column[0]} ({column[1]})')
+
+        print('\n--- view structures ---')
+        for view in view_structures:
+            print(f'view name: {view[0]}')
+            for column in view[1]:
+                print(f'- {column[0]} ({column[1]})')
+
+    def compare_db(self, source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame):
         if source_frame.db_dropdown.get() == maria_db: self.source_db_driver = 'mysql+pymysql'
         # TODO: add other database drivers
         if destination_frame.db_dropdown.get() == maria_db: self.destination_db_driver = 'mysql+pymysql'
@@ -193,23 +195,75 @@ class CompareFrame:
         self.source_view_structures = source_db_connector.view_structures
         self.destination_table_structures = destination_db_connector.table_structures
         self.destination_view_structures = destination_db_connector.view_structures
-        
-        self.print_table_structures(source_db_connector.database, self.source_table_structures, self.source_view_structures)
-        self.print_table_structures(destination_db_connector.database, self.destination_table_structures, self.destination_view_structures)
 
-    def print_table_structures(self, database_name, table_structures, view_structures):
-        print(f'\n### {database_name} ###')
-        print('--- table structures ---')
-        for table in table_structures:
-            print(f'table name: {table[0]}')
-            for column in table[1]:
-                print(f'- {column[0]} ({column[1]})')
+        # self.print_table_structures(source_db_connector.database, self.source_table_structures, self.source_view_structures)
+        # self.print_table_structures(destination_db_connector.database, self.destination_table_structures, self.destination_view_structures)
 
-        print('\n--- view structures ---')
-        for view in view_structures:
-            print(f'view name: {view[0]}')
-            for column in view[1]:
-                print(f'- {column[0]} ({column[1]})')
+        # clear screen and set next screen
+        source_frame.frame.destroy()
+        destination_frame.frame.destroy()
+        self.frame.destroy()
+        result_frame.frame.pack(side='top')
+
+        # table sync logic
+        print('#######################################################################################################')
+        print('### source ###')
+        for elem in self.source_table_structures: print(elem)
+        print('\n### destination ###')
+        for elem in self.destination_table_structures: print(elem)
+
+        source_table_list = [elem[0] for elem in self.source_table_structures]
+        destination_table_list = [elem[0] for elem in self.destination_table_structures]
+        self.new_tables = []
+        self.deleted_tables = []
+
+        # TODO: check for equal columns (table has been renamed)
+        print('\n### New tables ###')
+        result_frame.result_text.insert(tk.END, '### New tables ###\n')
+        for elem in self.source_table_structures:
+            if elem[0] not in destination_table_list:
+                self.new_tables.append(elem)
+                print(elem)
+                result_frame.result_text.insert(tk.END, f'{elem[0]}\n')
+                for column in elem[1]:
+                    result_frame.result_text.insert(tk.END, f'- {column[0]} ({column[1]})\n')
+                result_frame.result_text.insert(tk.END, '\n')
+
+        # TODO: check for equal columns (table has been renamed)
+        print('\n### Deleted tables ###')
+        result_frame.result_text.insert(tk.END, '\n### Deleted tables ###\n')
+        for elem in self.destination_table_structures:
+            if elem[0] not in source_table_list:
+                self.deleted_tables.append(elem)
+                print(elem)
+                result_frame.result_text.insert(tk.END, f'{elem[0]}\n')
+                for column in elem[1]:
+                    result_frame.result_text.insert(tk.END, f'- {column[0]} ({column[1]})\n')
+                result_frame.result_text.insert(tk.END, '\n')
+
+
+class ResultFrame:
+    def __init__(self, root):
+        self.frame = tk.Frame(root, width=580, height=250, padx=10, pady=10)
+        self.deploy_button = ttk.Button(self.frame, text='Deploy changes to database', command=lambda:self.deploy_to_database())
+        self.deploy_button.pack(side='bottom')
+        self.generate_script_button = ttk.Button(self.frame, text='Generate script', command=lambda:self.generate_script())
+        self.generate_script_button.pack(side='bottom')
+
+        self.result_text = tk.Text(self.frame, height=200, width=600)
+        self.result_text.pack(side='top')
+
+    def generate_script(self):
+        pass
+        # for elem in compare_frame.new_tables:
+        #     ddl_script = f'CREATE TABLE {elem[0]}'
+
+        with open('../util/DDL_Script.sql', 'w') as file:
+            file.write('ddl_script')
+
+
+    def deploy_to_database(self):
+        pass
 
 
 if __name__ == '__main__':
