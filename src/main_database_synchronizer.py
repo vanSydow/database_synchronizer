@@ -21,43 +21,36 @@ class App():
         root.title('Database Synchronizer')
         root.geometry('600x300')
 
-        compare_frame = CompareFrame(root)
+        db_connector = DBConnector()
         source_frame = DBConnectionFrame(root, 'Source')
         destination_frame = DBConnectionFrame(root, 'Destination')
-
-
-        # create a model
-        # model = Model('hello@pythontutorial.net')
-        #
-        # # create a view and place it on the root window
-        # view = View(self)
-        # view.grid(row=0, column=0, padx=10, pady=10)
-        #
-        # # create a controller
-        # controller = Controller(model, view)
-        #
-        # # set the controller to view
-        # view.set_controller(controller)
+        compare_frame = CompareFrame(root, db_connector, source_frame, destination_frame)
 
 
 class DBConnector:
     def connect_to_db(self, db_driver, user, password, host, database):
-        self.db_driver = db_driver
-        self.user = user
-        self.password = password
-        self.host = host
-        self.database = database
-        self.connection_string = f'{db_driver}://{user}:{password}@{host}/{database}'
-        self.engine = create_engine(self.connection_string)
-        self.connection = self.engine.connect()
+        try:
+            self.db_driver = db_driver
+            self.user = user
+            self.password = password
+            self.host = host
+            self.database = database
+            self.connection_string = f'{db_driver}://{user}:{password}@{host}/{database}'
+            self.engine = create_engine(self.connection_string)
+            print(f'connect_to_db: {self.connection_string}')
+
+        except Exception:
+            messagebox.showerror('Database Connection Error', 'Connecting to database failed :(')
+            traceback.print_exc()
 
     def execute_statement(self, statement):
-        cursor = self.connection.execute(statement)
-        query_result = cursor.fetchall()
+        with self.engine.connect() as connection:
+            query_result = connection.execute(statement).fetchall()
         return query_result
 
     def get_table_structures(self):
         # get tables and views list
+        print(f'get_table_structures: {self.connection_string}')
         query_result_tables = self.execute_statement(f'show full tables from {self.database};')
         tables = [row[0] for row in query_result_tables if row[1] == 'BASE TABLE']
         views = [row[0] for row in query_result_tables if row[1] == 'VIEW']
@@ -77,6 +70,7 @@ class DBConnector:
             self.view_structures.append((table, columns))
 
     def print_table_structures(self):
+        print(f'\n### {self.database} ###')
         print('--- table structures ---')
         for table in self.table_structures:
             print(f'table name: {table[0]}')
@@ -115,7 +109,7 @@ class DBConnectionFrame:
         self.password_label = tk.Label(self.frame, text='Password:')
 
     def create_elements_connection_window(self):
-        self.db_dropdown = ttk.Combobox(self.frame, values=[maria_db, mysql, postgres, sql_server], state='readonly')
+        self.db_dropdown = ttk.Combobox(self.frame, values=[maria_db], state='readonly')    # TODO: add other databases
         self.host_input = ttk.Entry(self.frame)
         self.database_name_input = ttk.Entry(self.frame)
         self.user_input = ttk.Entry(self.frame)
@@ -151,14 +145,13 @@ class DBConnectionFrame:
 
     def test_connection(self):
         try:
-            if self.db_dropdown.get() == maria_db:
-                self.db_driver = 'mysql+pymysql'
-            else:
-                print('database driver invalid')
+            if self.db_dropdown.get() == maria_db: self.db_driver = 'mysql+pymysql'
+            # TODO: add other database drivers
 
             engine = create_engine(
                 f'{self.db_driver}://{self.user_input.get()}:{self.password_input.get()}@{self.host_input.get()}/{self.database_name_input.get()}',
                 connect_args={'connect_timeout': 3}).connect()
+            engine.close()
             messagebox.showinfo('Connection Test', 'Connection test successful :)')
 
         except Exception:
@@ -167,18 +160,36 @@ class DBConnectionFrame:
 
 
 class CompareFrame:
-    def __init__(self, root):
+    def __init__(self, root, db_connector, source_frame, destination_frame):
+        self.source_db = db_connector
+        self.destination_db = db_connector
         self.frame = tk.Frame(root, width=600, height=100)
         self.frame.pack(side='bottom')
-        self.compare_db_button = ttk.Button(self.frame, text='Compare Databases', command=self.compare_db)
+        self.compare_db_button = ttk.Button(self.frame, text='Compare Databases', command=lambda:self.compare_db(source_frame, destination_frame))
         self.compare_db_button.grid(row=0, column=0)
 
-    def compare_db(self):
-        self.source_db = DBConnector()
-        self.destination_db = DBConnector()
+    def compare_db(self, source_frame, destination_frame):
+        if source_frame.db_dropdown.get() == maria_db: self.source_db_driver = 'mysql+pymysql'
+        # TODO: add other database drivers
+        if destination_frame.db_dropdown.get() == maria_db: self.destination_db_driver = 'mysql+pymysql'
+        # TODO: add other database drivers
 
-        # self.source_db.connect_to_db(source.db_driver, login_data['username'], login_data['password'],
-        #                              login_data['host'], 'gym')
+        self.source_db.connect_to_db(self.source_db_driver,
+                                     source_frame.user_input.get(),
+                                     source_frame.password_input.get(),
+                                     source_frame.host_input.get(),
+                                     source_frame.database_name_input.get())
+        self.destination_db.connect_to_db(self.destination_db_driver,
+                                          destination_frame.user_input.get(),
+                                          destination_frame.password_input.get(),
+                                          destination_frame.host_input.get(),
+                                          destination_frame.database_name_input.get())
+
+        self.source_db.get_table_structures()
+        self.destination_db.get_table_structures()
+        self.source_db.print_table_structures()
+        self.destination_db.print_table_structures()
+
 
 
 if __name__ == '__main__':
@@ -195,17 +206,18 @@ if __name__ == '__main__':
 
         root.mainloop()
 
+        # with open('../util/default_databases.json', 'r') as file:
+        #     login_data = json.load(file)
+        #
         # source_db = DBConnector()
-        # source_db.connect_to_db('mysql+pymysql', login_data['username'], login_data['password'], login_data['host'], 'gym')
+        # source_db.connect_to_db('mysql+pymysql', login_data['Source']['username'], login_data['Source']['password'], login_data['Source']['host'], login_data['Source']['db_name'])
         # destination_db = DBConnector()
-        # destination_db.connect_to_db('mysql+pymysql', login_data['username'], login_data['password'], login_data['host'], 'test')
+        # destination_db.connect_to_db('mysql+pymysql', login_data['Destination']['username'], login_data['Destination']['password'], login_data['Destination']['host'], login_data['Destination']['db_name'])
         #
         # source_db.get_table_structures()
         # destination_db.get_table_structures()
         #
-        # print('--- source DB structures ---')
         # source_db.print_table_structures()
-        # print('\n--- destination DB structures ---')
         # destination_db.print_table_structures()
 
 
