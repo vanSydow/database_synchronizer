@@ -22,13 +22,19 @@ class App():
         root.title('Database Synchronizer')
         root.geometry('600x300')
 
+        shared_data = SharedData()
         source_db_connector = DBConnector()
         destination_db_connector = DBConnector()
         source_frame = DBConnectionFrame(root, 'Source')
         destination_frame = DBConnectionFrame(root, 'Destination')
-        result_frame = ResultFrame(root)
-        compare_frame = CompareFrame(root, source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame)
+        result_frame = ResultFrame(root, shared_data, destination_db_connector)
+        compare_frame = CompareFrame(root, source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame, shared_data)
 
+
+class SharedData:
+    def __init__(self):
+        self.new_tables = []
+        self.deleted_tables = []
 
 
 class DBConnector:
@@ -52,8 +58,13 @@ class DBConnector:
 
     def execute_statement(self, statement):
         with self.engine.connect() as connection:
-            query_result = connection.execute(statement).fetchall()
-        return query_result
+            query_result = connection.execute(statement)
+            try:
+                result = query_result.fetchall()
+            except Exception:
+                print(f'{statement} does not return values.')
+                return None
+        return result
 
     def get_table_structures(self):
         # get tables and views list
@@ -103,7 +114,7 @@ class DBConnectionFrame:
         self.host_input = ttk.Entry(self.frame)
         self.database_name_input = ttk.Entry(self.frame)
         self.user_input = ttk.Entry(self.frame)
-        self.password_input = ttk.Entry(self.frame)
+        self.password_input = ttk.Entry(self.frame, show='*')
         self.test_connection_button = ttk.Button(self.frame, text='Test connection', command=self.test_connection)
 
     def add_to_grid_connection_window(self, offset):
@@ -150,11 +161,11 @@ class DBConnectionFrame:
 
 
 class CompareFrame:
-    def __init__(self, root, source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame):
+    def __init__(self, root, source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame, shared_data):
         self.frame = tk.Frame(root, width=600, height=100)
         self.frame.pack(side='bottom')
         self.compare_db_button = ttk.Button(self.frame, text='Compare Databases',
-                                            command=lambda:self.compare_db(source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame))
+                                            command=lambda:self.compare_db(source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame, shared_data))
         self.compare_db_button.grid(row=0, column=0)
 
     def print_table_structures(self, database_name, table_structures, view_structures):
@@ -171,7 +182,7 @@ class CompareFrame:
             for column in view[1]:
                 print(f'- {column[0]} ({column[1]})')
 
-    def compare_db(self, source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame):
+    def compare_db(self, source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame, shared_data):
         if source_frame.db_dropdown.get() == maria_db: self.source_db_driver = 'mysql+pymysql'
         # TODO: add other database drivers
         if destination_frame.db_dropdown.get() == maria_db: self.destination_db_driver = 'mysql+pymysql'
@@ -214,15 +225,13 @@ class CompareFrame:
 
         source_table_list = [elem[0] for elem in self.source_table_structures]
         destination_table_list = [elem[0] for elem in self.destination_table_structures]
-        self.new_tables = []
-        self.deleted_tables = []
 
         # TODO: check for equal columns (table has been renamed)
         print('\n### New tables ###')
         result_frame.result_text.insert(tk.END, '### New tables ###\n')
         for elem in self.source_table_structures:
             if elem[0] not in destination_table_list:
-                self.new_tables.append(elem)
+                shared_data.new_tables.append(elem)
                 print(elem)
                 result_frame.result_text.insert(tk.END, f'{elem[0]}\n')
                 for column in elem[1]:
@@ -234,7 +243,7 @@ class CompareFrame:
         result_frame.result_text.insert(tk.END, '\n### Deleted tables ###\n')
         for elem in self.destination_table_structures:
             if elem[0] not in source_table_list:
-                self.deleted_tables.append(elem)
+                shared_data.deleted_tables.append(elem)
                 print(elem)
                 result_frame.result_text.insert(tk.END, f'{elem[0]}\n')
                 for column in elem[1]:
@@ -243,27 +252,58 @@ class CompareFrame:
 
 
 class ResultFrame:
-    def __init__(self, root):
+    def __init__(self, root, shared_data, destination_db_connector):
         self.frame = tk.Frame(root, width=580, height=250, padx=10, pady=10)
-        self.deploy_button = ttk.Button(self.frame, text='Deploy changes to database', command=lambda:self.deploy_to_database())
+        self.deploy_button = ttk.Button(self.frame, text='Deploy changes to database', command=lambda:self.deploy_to_database(shared_data, destination_db_connector))
         self.deploy_button.pack(side='bottom')
-        self.generate_script_button = ttk.Button(self.frame, text='Generate script', command=lambda:self.generate_script())
+        self.generate_script_button = ttk.Button(self.frame, text='Generate script', command=lambda:self.ddl_script_to_file(shared_data))
         self.generate_script_button.pack(side='bottom')
-
         self.result_text = tk.Text(self.frame, height=200, width=600)
         self.result_text.pack(side='top')
+        self.ddl_script = ''
 
-    def generate_script(self):
-        pass
-        # for elem in compare_frame.new_tables:
-        #     ddl_script = f'CREATE TABLE {elem[0]}'
+    def generate_ddl_script(self, shared_data):
+        # create table statements
+        self.ddl_script = ''
+        for table in shared_data.new_tables:
+            self.ddl_script += f'CREATE TABLE IF NOT EXISTS {table[0]} (\n'
+            for column in table[1]:
+                self.ddl_script += f'    {column[0]} {column[1]},\n'
+            self.ddl_script = self.ddl_script[:-2]
+            self.ddl_script += '\n);\n\n'
 
-        with open('../util/DDL_Script.sql', 'w') as file:
-            file.write('ddl_script')
+        # delete table statements
+        for table in shared_data.deleted_tables:
+            self.ddl_script += f'DROP TABLE IF EXISTS {table[0]};\n\n'
 
+        self.ddl_script = self.ddl_script.strip('\n')
 
-    def deploy_to_database(self):
-        pass
+    def ddl_script_to_file(self, shared_data):
+        try:
+            self.generate_ddl_script(shared_data)
+            with open('../util/DDL_Script.sql', 'w') as file:
+                file.write(self.ddl_script)
+            messagebox.showinfo('DDL Script Generation', 'DDL script generated sucessfully :)')
+
+        except Exception:
+            messagebox.showerror('DDL Script Generation', 'DDL script generation failed :(')
+            traceback.print_exc()
+
+    def deploy_to_database(self, shared_data, db_connector_destination):
+        try:
+            self.generate_ddl_script(shared_data)
+            if not self.ddl_script.strip():
+                messagebox.showinfo('DDl Script Deployment', 'DDL script is empty')
+            else:
+                mb_answer = messagebox.askquestion('Deploy changes', f'Deploy changes to {db_connector_destination.host}/{db_connector_destination.database} ?')
+                if mb_answer == 'yes':
+                    for statement in self.ddl_script.split(';'):    # need for multi statements
+                        if statement: db_connector_destination.execute_statement(f'{statement};')
+                    messagebox.showinfo('DDL Script Deployment', 'DDL script deployment sucessfully :)')
+
+        except Exception:
+            messagebox.showerror('DDl Script Deployment', 'DDL script deployment failed :(')
+            traceback.print_exc()
 
 
 if __name__ == '__main__':
