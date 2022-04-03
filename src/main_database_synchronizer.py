@@ -1,20 +1,24 @@
 import traceback
 import json
+import os
+import glob
 from time import sleep
 from sqlalchemy import create_engine
 import tkinter as tk
 from tkinter import ttk
 from tkinter import messagebox
+from tkinter import filedialog
 
 
 # pip install SQLAlchemy
 # pip install PyMySQL
 
+dev_util_dir = f'{os.getcwd()}\\..\\util'
+prod_util_dir = f'{os.getcwd()}\\util'
 
 maria_db = 'MariaDB'
 mysql = 'MySQL'
 postgres = 'Postgres'
-sql_server = 'SQL Server'
 
 
 class App():
@@ -25,16 +29,19 @@ class App():
         shared_data = SharedData()
         source_db_connector = DBConnector()
         destination_db_connector = DBConnector()
-        source_frame = DBConnectionFrame(root, 'Source')
-        destination_frame = DBConnectionFrame(root, 'Destination')
+        profile_frame = ProfileFrame(root, shared_data)
+        source_frame = DBConnectionFrame(root, shared_data, 'Source')
+        destination_frame = DBConnectionFrame(root, shared_data, 'Destination')
         result_frame = ResultFrame(root, shared_data, destination_db_connector)
         compare_frame = CompareFrame(root, source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame, shared_data)
 
 
 class SharedData:
     def __init__(self):
+        self.profile = {}
         self.new_tables = []
         self.deleted_tables = []
+        self.altered_tables = []
 
 
 class DBConnector:
@@ -66,6 +73,7 @@ class DBConnector:
                 return None
         return result
 
+    # TODO: add other databases
     def get_table_structures(self):
         # get tables and views list
         query_result_tables = self.execute_statement(f'show full tables from {self.database};')
@@ -85,8 +93,35 @@ class DBConnector:
             self.view_structures.append((table, columns))
 
 
+class ProfileFrame:
+    def __init__(self, root, shared_data):
+        self.frame = tk.Frame(root, width=600, height=100)
+        self.frame.pack(side='top', anchor='w')
+        self.profile_header_label = tk.Label(self.frame, text=f'Profile selected:')
+        self.profile_header_label.grid(row=0, column=0)
+        self.profile_text = tk.StringVar()
+        self.profile_text_label = tk.Label(self.frame, width=30, bg='white', textvariable=self.profile_text)
+        self.profile_text_label.grid(row=0, column=1)
+        self.open_button = ttk.Button(self.frame, text='Open a File', command=lambda:self.select_file(shared_data))
+        self.open_button.grid(row=0, column=2)
+
+        # load last modified file
+        profile_list = glob.glob(f'{dev_util_dir}\\*.json')
+        latest_profile = max(profile_list, key=os.path.getctime)
+        with open(latest_profile, 'r') as file:
+            shared_data.profile = json.load(file)
+        self.profile_text.set(latest_profile.split('\\')[-1])
+
+    def select_file(self, shared_data):
+        filetypes = (('JSON files', '*.json'), ('All files', '*.*'))
+        profile_filename = filedialog.askopenfilename(title='Open profile', initialdir=dev_util_dir, filetypes=filetypes)
+        self.profile_text.set(profile_filename.split('/')[-1])
+        with open(profile_filename, 'r') as file:
+            shared_data.profile = json.load(file)
+
+
 class DBConnectionFrame:
-    def __init__(self, root, src_dst):
+    def __init__(self, root, shared_data, src_dst):
         if src_dst == 'Source':
             self.offset = 0
             self.side = 'left'
@@ -99,7 +134,7 @@ class DBConnectionFrame:
         self.create_lables_connection_window(src_dst)
         self.create_elements_connection_window()
         self.add_to_grid_connection_window(self.offset)
-        self.write_default_connection_values(src_dst)
+        self.write_default_connection_values(shared_data, src_dst)
 
     def create_lables_connection_window(self, src_dst):
         self.header_label = tk.Label(self.frame, text=f'{src_dst} database')
@@ -118,28 +153,29 @@ class DBConnectionFrame:
         self.test_connection_button = ttk.Button(self.frame, text='Test connection', command=self.test_connection)
 
     def add_to_grid_connection_window(self, offset):
-        self.db_label.grid(row=0, column=0 + offset)
-        self.db_dropdown.grid(row=0, column=1 + offset)
-        self.host_label.grid(row=1, column=0 + offset)
-        self.host_input.grid(row=1, column=1 + offset)
-        self.database_name_label.grid(row=2, column=0 + offset)
-        self.database_name_input.grid(row=2, column=1 + offset)
-        self.user_label.grid(row=3, column=0 + offset)
-        self.user_input.grid(row=3, column=1 + offset)
-        self.password_label.grid(row=4, column=0 + offset)
-        self.password_input.grid(row=4, column=1 + offset)
-        self.test_connection_button.grid(row=5, column=0 + offset, columnspan=2)
+        self.header_label.grid(row=0, column=0+offset, columnspan=2)
+        self.db_label.grid(row=1, column=0 + offset)
+        self.db_dropdown.grid(row=1, column=1 + offset)
+        self.host_label.grid(row=2, column=0 + offset)
+        self.host_input.grid(row=2, column=1 + offset)
+        self.database_name_label.grid(row=3, column=0 + offset)
+        self.database_name_input.grid(row=3, column=1 + offset)
+        self.user_label.grid(row=4, column=0 + offset)
+        self.user_input.grid(row=4, column=1 + offset)
+        self.password_label.grid(row=5, column=0 + offset)
+        self.password_input.grid(row=5, column=1 + offset)
+        self.test_connection_button.grid(row=6, column=0+offset, columnspan=2)
 
-    def write_default_connection_values(self, src_dst):
+    def write_default_connection_values(self, shared_data, src_dst):
         try:
-            with open('../util/default_databases.json', 'r') as file:
-                login_data = json.load(file)
+            # with open('../util/default_databases.json', 'r') as file:
+            #     login_data = json.load(file)
 
-            self.db_dropdown.set(login_data[src_dst]['db_type'])
-            self.host_input.insert(0, login_data[src_dst]['host'])
-            self.database_name_input.insert(0, login_data[src_dst]['db_name'])
-            self.user_input.insert(0, login_data[src_dst]['username'])
-            self.password_input.insert(0, login_data[src_dst]['password'])
+            self.db_dropdown.set(shared_data.profile[src_dst]['db_type'])
+            self.host_input.insert(0, shared_data.profile[src_dst]['host'])
+            self.database_name_input.insert(0, shared_data.profile[src_dst]['db_name'])
+            self.user_input.insert(0, shared_data.profile[src_dst]['username'])
+            self.password_input.insert(0, shared_data.profile[src_dst]['password'])
 
         except Exception:
             traceback.print_exc()
@@ -219,36 +255,67 @@ class CompareFrame:
         # table sync logic
         print('#######################################################################################################')
         print('### source ###')
+        print('# tables')
         for elem in self.source_table_structures: print(elem)
+        print('# views')
+        for elem in self.source_view_structures: print(elem)
+
         print('\n### destination ###')
+        print('-#tables')
         for elem in self.destination_table_structures: print(elem)
+        print('# views')
+        for elem in self.destination_view_structures: print(elem)
 
         source_table_list = [elem[0] for elem in self.source_table_structures]
+        source_view_list = [elem[0] for elem in self.source_table_structures]
         destination_table_list = [elem[0] for elem in self.destination_table_structures]
+        destination_view_list = [elem[0] for elem in self.destination_table_structures]
+        equal_table_list = set(source_table_list) & set(destination_table_list)
 
         # TODO: check for equal columns (table has been renamed)
         print('\n### New tables ###')
         result_frame.result_text.insert(tk.END, '### New tables ###\n')
-        for elem in self.source_table_structures:
-            if elem[0] not in destination_table_list:
-                shared_data.new_tables.append(elem)
-                print(elem)
-                result_frame.result_text.insert(tk.END, f'{elem[0]}\n')
-                for column in elem[1]:
+        for table_struct in self.source_table_structures:
+            if table_struct[0] not in destination_table_list:
+                shared_data.new_tables.append(table_struct)
+                print(table_struct)
+                result_frame.result_text.insert(tk.END, f'{table_struct[0]}\n')
+                for column in table_struct[1]:
                     result_frame.result_text.insert(tk.END, f'- {column[0]} ({column[1]})\n')
                 result_frame.result_text.insert(tk.END, '\n')
 
         # TODO: check for equal columns (table has been renamed)
         print('\n### Deleted tables ###')
         result_frame.result_text.insert(tk.END, '\n### Deleted tables ###\n')
-        for elem in self.destination_table_structures:
-            if elem[0] not in source_table_list:
-                shared_data.deleted_tables.append(elem)
-                print(elem)
-                result_frame.result_text.insert(tk.END, f'{elem[0]}\n')
-                for column in elem[1]:
+        for table_struct in self.destination_table_structures:
+            if table_struct[0] not in source_table_list:
+                shared_data.deleted_tables.append(table_struct)
+                print(table_struct)
+                result_frame.result_text.insert(tk.END, f'{table_struct[0]}\n')
+                for column in table_struct[1]:
                     result_frame.result_text.insert(tk.END, f'- {column[0]} ({column[1]})\n')
                 result_frame.result_text.insert(tk.END, '\n')
+
+        print('\n### Altered tables ###')
+        result_frame.result_text.insert(tk.END, '\n### Altered tables ###\n')
+        equal_source_tables = []
+        equal_destination_tables = []
+
+        # check for tables with same name
+        for source_table_struct in self.source_table_structures:
+            for destination_table_struct in self.destination_table_structures:
+                if source_table_struct[0] == destination_table_struct[0]:
+                    equal_source_tables.append(source_table_struct)
+                    equal_destination_tables.append(destination_table_struct)
+
+        # check for exclusive column names in source-destination table pair
+        for i in range(len(equal_source_tables)):
+            source_column_names = [column[0] for column in equal_source_tables[i][1]]
+            destination_column_names = [column[0] for column in equal_destination_tables[i][1]]
+            unique_source_columns = set(source_column_names) - set(destination_column_names)
+            unique_destination_columns = set(destination_column_names) - set(source_column_names)
+
+            print(2)
 
 
 class ResultFrame:
@@ -281,9 +348,12 @@ class ResultFrame:
     def ddl_script_to_file(self, shared_data):
         try:
             self.generate_ddl_script(shared_data)
-            with open('../util/DDL_Script.sql', 'w') as file:
-                file.write(self.ddl_script)
-            messagebox.showinfo('DDL Script Generation', 'DDL script generated sucessfully :)')
+            if not self.ddl_script.strip():
+                messagebox.showinfo('DDL Script Generation', 'Nothing to create ;)')
+            else:
+                with open('../util/DDL_Script.sql', 'w') as file:
+                    file.write(self.ddl_script)
+                messagebox.showinfo('DDL Script Generation', 'DDL script generated sucessfully :)')
 
         except Exception:
             messagebox.showerror('DDL Script Generation', 'DDL script generation failed :(')
@@ -293,7 +363,7 @@ class ResultFrame:
         try:
             self.generate_ddl_script(shared_data)
             if not self.ddl_script.strip():
-                messagebox.showinfo('DDl Script Deployment', 'DDL script is empty')
+                messagebox.showinfo('DDL Script Deployment', 'Nothing to deploy ;)')
             else:
                 mb_answer = messagebox.askquestion('Deploy changes', f'Deploy changes to {db_connector_destination.host}/{db_connector_destination.database} ?')
                 if mb_answer == 'yes':
