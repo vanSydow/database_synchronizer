@@ -14,7 +14,12 @@ from tkinter import filedialog
 # pip install PyMySQL
 
 dev_util_dir = f'{os.getcwd()}\\..\\util'
+dev_profiles_dir = f'{os.getcwd()}\\..\\profiles'
+dev_ddl_scripts_dir = f'{os.getcwd()}\\..\\ddl_scripts'
 prod_util_dir = f'{os.getcwd()}\\util'
+prod_profiles_dir = f'{os.getcwd()}\\profiles'
+prod_ddl_scripts_dir = f'{os.getcwd()}\\ddl_scripts'
+
 
 maria_db = 'MariaDB'
 mysql = 'MySQL'
@@ -28,12 +33,12 @@ class App():
 
         shared_data = SharedData()
         source_db_connector = DBConnector()
-        destination_db_connector = DBConnector()
         profile_frame = ProfileFrame(root, shared_data)
+        destination_db_connector = DBConnector()
         source_frame = DBConnectionFrame(root, shared_data, 'Source')
         destination_frame = DBConnectionFrame(root, shared_data, 'Destination')
         result_frame = ResultFrame(root, shared_data, destination_db_connector)
-        compare_frame = CompareFrame(root, source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame, shared_data)
+        compare_frame = CompareFrame(root, shared_data, source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame)
 
 
 class SharedData:
@@ -106,23 +111,33 @@ class ProfileFrame:
         self.open_button.grid(row=0, column=2)
 
         # load last modified file
-        profile_list = glob.glob(f'{dev_util_dir}\\*.json')
+        profile_list = glob.glob(f'{dev_profiles_dir}\\*.json')
         latest_profile = max(profile_list, key=os.path.getctime)
-        with open(latest_profile, 'r') as file:
-            shared_data.profile = json.load(file)
-        self.profile_text.set(latest_profile.split('\\')[-1])
+        try:
+            with open(latest_profile, 'r') as file:
+                shared_data.profile = json.load(file)
+            self.profile_text.set(latest_profile.split('\\')[-1])
+        except Exception:
+            messagebox.showerror('Error', 'Most recent profile file is invalid.')
+            traceback.print_exc()
 
     def select_file(self, shared_data):
-        filetypes = (('JSON files', '*.json'), ('All files', '*.*'))
-        profile_filename = filedialog.askopenfilename(title='Open profile', initialdir=dev_util_dir, filetypes=filetypes)
+        filetypes = [('JSON files', '*.json')]
+        profile_filename = filedialog.askopenfilename(title='Open profile', initialdir=dev_profiles_dir, filetypes=filetypes)
         self.profile_text.set(profile_filename.split('/')[-1])
         with open(profile_filename, 'r') as file:
             shared_data.profile = json.load(file)
+        for instance in DBConnectionFrame.instances:
+            instance.write_default_connection_values(shared_data)
 
 
 class DBConnectionFrame:
+    instances = []
+
     def __init__(self, root, shared_data, src_dst):
-        if src_dst == 'Source':
+        self.__class__.instances.append(self)
+        self.src_dst = src_dst
+        if self.src_dst == 'Source':
             self.offset = 0
             self.side = 'left'
         else:
@@ -131,13 +146,13 @@ class DBConnectionFrame:
 
         self.frame = tk.Frame(root, width=200, height=100)
         self.frame.pack(side=self.side)
-        self.create_lables_connection_window(src_dst)
+        self.create_lables_connection_window()
         self.create_elements_connection_window()
         self.add_to_grid_connection_window(self.offset)
-        self.write_default_connection_values(shared_data, src_dst)
+        self.write_default_connection_values(shared_data)
 
-    def create_lables_connection_window(self, src_dst):
-        self.header_label = tk.Label(self.frame, text=f'{src_dst} database')
+    def create_lables_connection_window(self):
+        self.header_label = tk.Label(self.frame, text=f'{self.src_dst} database')
         self.db_label = tk.Label(self.frame, text='Database type:')
         self.host_label = tk.Label(self.frame, text='Database address:')
         self.database_name_label = tk.Label(self.frame, text='Database name:')
@@ -166,16 +181,17 @@ class DBConnectionFrame:
         self.password_input.grid(row=5, column=1 + offset)
         self.test_connection_button.grid(row=6, column=0+offset, columnspan=2)
 
-    def write_default_connection_values(self, shared_data, src_dst):
+    def write_default_connection_values(self, shared_data):
         try:
-            # with open('../util/default_databases.json', 'r') as file:
-            #     login_data = json.load(file)
-
-            self.db_dropdown.set(shared_data.profile[src_dst]['db_type'])
-            self.host_input.insert(0, shared_data.profile[src_dst]['host'])
-            self.database_name_input.insert(0, shared_data.profile[src_dst]['db_name'])
-            self.user_input.insert(0, shared_data.profile[src_dst]['username'])
-            self.password_input.insert(0, shared_data.profile[src_dst]['password'])
+            self.db_dropdown.set(shared_data.profile[self.src_dst]['db_type'])
+            self.host_input.delete(0, 'end')
+            self.host_input.insert(0, shared_data.profile[self.src_dst]['host'])
+            self.database_name_input.delete(0, 'end')
+            self.database_name_input.insert(0, shared_data.profile[self.src_dst]['db_name'])
+            self.user_input.delete(0, 'end')
+            self.user_input.insert(0, shared_data.profile[self.src_dst]['username'])
+            self.password_input.delete(0, 'end')
+            self.password_input.insert(0, shared_data.profile[self.src_dst]['password'])
 
         except Exception:
             traceback.print_exc()
@@ -197,12 +213,48 @@ class DBConnectionFrame:
 
 
 class CompareFrame:
-    def __init__(self, root, source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame, shared_data):
+    def __init__(self, root, shared_data, source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame):
         self.frame = tk.Frame(root, width=600, height=100)
         self.frame.pack(side='bottom')
+        self.init_button = ttk.Button(self.frame, text='Initialize DBs', command=lambda: self.init_dbs())
+        self.init_button.grid(row=0, column=0)
+        self.get_changes_button = ttk.Button(self.frame, text='Get DB changes', command=lambda:self.get_changes())
+        self.get_changes_button.grid(row=1, column=0)
         self.compare_db_button = ttk.Button(self.frame, text='Compare Databases',
                                             command=lambda:self.compare_db(source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame, shared_data))
-        self.compare_db_button.grid(row=0, column=0)
+        # self.compare_db_button.grid(row=2, column=0)
+
+    def init_dbs(self):
+        mb_answer = messagebox.askquestion('Initialize DBs',
+                                           f'Would you like to create a new profile and initialize it with the given database credentials?\n' \
+                                           f'CAUTION: Make sure that both databases have the same structure during this process!')
+        if mb_answer == 'yes':
+            file_output = {
+                DBConnectionFrame.instances[0].src_dst : {
+                    'db_type': DBConnectionFrame.instances[0].db_dropdown.get(),
+                    'host': DBConnectionFrame.instances[0].host_input.get(),
+                    'db_name': DBConnectionFrame.instances[0].database_name_input.get(),
+                    'username': DBConnectionFrame.instances[0].user_input.get(),
+                    'password': DBConnectionFrame.instances[0].password_input.get()
+                },
+                DBConnectionFrame.instances[1].src_dst: {
+                    'db_type': DBConnectionFrame.instances[1].db_dropdown.get(),
+                    'host': DBConnectionFrame.instances[1].host_input.get(),
+                    'db_name': DBConnectionFrame.instances[1].database_name_input.get(),
+                    'username': DBConnectionFrame.instances[1].user_input.get(),
+                    'password': DBConnectionFrame.instances[1].password_input.get()
+                }
+            }
+
+            json_output = json.dumps(file_output, indent=4)
+            filetypes = [('JSON files', '*.json')]
+            filename = filedialog.asksaveasfile(title='Save profile', initialdir=dev_profiles_dir, filetypes=filetypes, defaultextension='.json')
+            filename.write(json_output)
+
+
+    def get_changes(self):
+        pass
+
 
     def print_table_structures(self, database_name, table_structures, view_structures):
         print(f'\n### {database_name} ###')
@@ -218,6 +270,7 @@ class CompareFrame:
             for column in view[1]:
                 print(f'- {column[0]} ({column[1]})')
 
+    # TODO: !!! on hold !!!
     def compare_db(self, source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame, shared_data):
         if source_frame.db_dropdown.get() == maria_db: self.source_db_driver = 'mysql+pymysql'
         # TODO: add other database drivers
@@ -315,7 +368,6 @@ class CompareFrame:
             unique_source_columns = set(source_column_names) - set(destination_column_names)
             unique_destination_columns = set(destination_column_names) - set(source_column_names)
 
-            print(2)
 
 
 class ResultFrame:

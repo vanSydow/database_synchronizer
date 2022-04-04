@@ -2,3 +2,6 @@
 util/database_login_data.json
 util/default_databases.json
 util/DDL_Script.sql
+util/
+ddl_scripts/
+profiles/
