@@ -12,6 +12,7 @@ from tkinter import filedialog
 
 # pip install SQLAlchemy
 # pip install PyMySQL
+# pip install psycopg2
 
 dev_util_dir = f'{os.getcwd()}\\..\\util'
 dev_profiles_dir = f'{os.getcwd()}\\..\\profiles'
@@ -23,7 +24,7 @@ prod_ddl_scripts_dir = f'{os.getcwd()}\\ddl_scripts'
 
 maria_db = 'MariaDB'
 mysql = 'MySQL'
-postgres = 'Postgres'
+postgres = 'PostgreSQL'
 
 
 class App():
@@ -33,8 +34,8 @@ class App():
 
         shared_data = SharedData()
         source_db_connector = DBConnector()
-        profile_frame = ProfileFrame(root, shared_data)
         destination_db_connector = DBConnector()
+        profile_frame = ProfileFrame(root, shared_data)
         source_frame = DBConnectionFrame(root, shared_data, 'Source')
         destination_frame = DBConnectionFrame(root, shared_data, 'Destination')
         result_frame = ResultFrame(root, shared_data, destination_db_connector)
@@ -55,13 +56,17 @@ class DBConnector:
         self.view_structures = []
 
     def connect_to_db(self, db_driver, user, password, host, database):
-        self.db_driver = db_driver
+        if db_driver == maria_db: self.db_driver = 'mysql+pymysql'
+        elif db_driver == postgres: self.db_driver = 'postgresql'
+        # TODO: add other database drivers
         self.user = user
         self.password = password
         self.host = host
         self.database = database
         try:
-            self.connection_string = f'{db_driver}://{user}:{password}@{host}/{database}'
+            if hasattr(self, 'engine'):
+                self.engine.dispose()
+            self.connection_string = f'{self.db_driver}://{self.user}:{self.password}@{self.host}/{self.database}'
             self.engine = create_engine(self.connection_string)
 
         except Exception:
@@ -118,15 +123,20 @@ class ProfileFrame:
                 shared_data.profile = json.load(file)
             self.profile_text.set(latest_profile.split('\\')[-1])
         except Exception:
-            messagebox.showerror('Error', 'Most recent profile file is invalid.')
+            messagebox.showerror('Error', 'Error opening most recent profile file.')
             traceback.print_exc()
 
     def select_file(self, shared_data):
         filetypes = [('JSON files', '*.json')]
         profile_filename = filedialog.askopenfilename(title='Open profile', initialdir=dev_profiles_dir, filetypes=filetypes)
-        self.profile_text.set(profile_filename.split('/')[-1])
-        with open(profile_filename, 'r') as file:
-            shared_data.profile = json.load(file)
+        try:
+            with open(profile_filename, 'r') as file:
+                shared_data.profile = json.load(file)
+                self.profile_text.set(profile_filename.split('/')[-1])
+        except Exception:
+            messagebox.showerror('Error', 'Error opening profile file.')
+            traceback.print_exc()
+
         for instance in DBConnectionFrame.instances:
             instance.write_default_connection_values(shared_data)
 
@@ -160,7 +170,7 @@ class DBConnectionFrame:
         self.password_label = tk.Label(self.frame, text='Password:')
 
     def create_elements_connection_window(self):
-        self.db_dropdown = ttk.Combobox(self.frame, values=[maria_db], state='readonly')    # TODO: add other databases
+        self.db_dropdown = ttk.Combobox(self.frame, values=[maria_db, postgres], state='readonly')    # TODO: add other databases
         self.host_input = ttk.Entry(self.frame)
         self.database_name_input = ttk.Entry(self.frame)
         self.user_input = ttk.Entry(self.frame)
@@ -198,7 +208,10 @@ class DBConnectionFrame:
 
     def test_connection(self):
         try:
-            if self.db_dropdown.get() == maria_db: self.db_driver = 'mysql+pymysql'
+            if self.db_dropdown.get() == maria_db:
+                self.db_driver = 'mysql+pymysql'
+            elif self.db_dropdown.get() == postgres:
+                self.db_driver = 'postgresql'
             # TODO: add other database drivers
 
             engine = create_engine(
@@ -216,18 +229,20 @@ class CompareFrame:
     def __init__(self, root, shared_data, source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame):
         self.frame = tk.Frame(root, width=600, height=100)
         self.frame.pack(side='bottom')
-        self.init_button = ttk.Button(self.frame, text='Initialize DBs', command=lambda: self.init_dbs())
+        self.init_button = ttk.Button(self.frame, text='Initialize DBs', command=lambda: self.init_dbs(source_db_connector, source_frame))
         self.init_button.grid(row=0, column=0)
         self.get_changes_button = ttk.Button(self.frame, text='Get DB changes', command=lambda:self.get_changes())
         self.get_changes_button.grid(row=1, column=0)
         self.compare_db_button = ttk.Button(self.frame, text='Compare Databases',
                                             command=lambda:self.compare_db(source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame, shared_data))
-        # self.compare_db_button.grid(row=2, column=0)
+        self.compare_db_button.grid(row=2, column=0)
 
-    def init_dbs(self):
-        mb_answer = messagebox.askquestion('Initialize DBs',
-                                           f'Would you like to create a new profile and initialize it with the given database credentials?\n' \
-                                           f'CAUTION: Make sure that both databases have the same structure during this process!')
+    def init_dbs(self, source_db_connector, source_frame):
+        mb_answer = messagebox.askquestion(
+            'Initialize DBs',
+            f'Would you like to create a new profile and initialize it with the given database credentials?\n'
+            f'CAUTION: Make sure that both databases have the same structure during this process!'
+        )
         if mb_answer == 'yes':
             file_output = {
                 DBConnectionFrame.instances[0].src_dst : {
@@ -246,6 +261,79 @@ class CompareFrame:
                 }
             }
 
+            source_db_connector.connect_to_db(source_frame.db_dropdown.get(),
+                                            source_frame.user_input.get(),
+                                            source_frame.password_input.get(),
+                                            source_frame.host_input.get(),
+                                            source_frame.database_name_input.get())
+
+            query_result = source_db_connector.execute_statement(
+                f"select pn.oid as schema_id, pn.nspname as schema_name, pc.oid as table_id, pc.relname as table_name, pa.attname as column_name, pa.atttypid as data_type_id, pt.typname as data_type_name "
+                f"from pg_catalog.pg_namespace pn "
+                f"join pg_catalog.pg_class pc on pn.oid = pc.relnamespace "
+                f"join pg_catalog.pg_attribute pa on pc.oid = pa.attrelid "
+                f"join pg_catalog.pg_type pt on pa.atttypid = pt.oid "
+                f"where "
+                f"    pn.nspname not like 'pg_%%' and pn.nspname != 'information_schema' and "
+                f"    attname not in ('cmax', 'cmin', 'ctid', 'tableoid', 'xmax', 'xmin') "
+                f"order by pn.oid, pc.oid;"
+            )
+
+            if not query_result:
+                messagebox.showerror('Error', 'Source database is empty.')
+                return -1
+
+            # init dicts with first row
+            schema_list = []
+            column_dict = {
+                'column_name': query_result[0][4],
+                'data_type_id': query_result[0][5],
+                'data_type_name': query_result[0][6]
+            }
+            table_dict = {
+                'table_id': query_result[0][2],
+                'table_name': query_result[0][3],
+                'columns': [column_dict]
+            }
+            schema_dict = {
+                'schema_id': query_result[0][0],
+                'schema_name': query_result[0][1],
+                'tables': []
+            }
+
+            for row in query_result[1:]:
+                column_dict = {
+                    'column_name': row[4],
+                    'data_type_id': row[5],
+                    'data_type_name': row[6]
+                }
+
+                # new table
+                if row[2] not in table_dict.values():
+                    schema_dict['tables'].append(table_dict)
+                    table_dict = {
+                        'table_id': row[2],
+                        'table_name': row[3],
+                        'columns': [column_dict]
+                    }
+                # existing table
+                else:
+                    table_dict['columns'].append(column_dict)
+
+                # new schema
+                if row[0] not in schema_dict.values():
+                    schema_list.append(schema_dict)
+                    schema_dict = {
+                        'schema_id': row[0],
+                        'schema_name': row[1],
+                        'tables': []
+                    }
+
+            # write dicts after last row
+            schema_dict['tables'].append(table_dict)
+            schema_list.append(schema_dict)
+
+            file_output['source_struct'] = schema_list
             json_output = json.dumps(file_output, indent=4)
             filetypes = [('JSON files', '*.json')]
             filename = filedialog.asksaveasfile(title='Save profile', initialdir=dev_profiles_dir, filetypes=filetypes, defaultextension='.json')
@@ -270,19 +358,14 @@ class CompareFrame:
             for column in view[1]:
                 print(f'- {column[0]} ({column[1]})')
 
-    # TODO: !!! on hold !!!
+    # TODO
     def compare_db(self, source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame, shared_data):
-        if source_frame.db_dropdown.get() == maria_db: self.source_db_driver = 'mysql+pymysql'
-        # TODO: add other database drivers
-        if destination_frame.db_dropdown.get() == maria_db: self.destination_db_driver = 'mysql+pymysql'
-        # TODO: add other database drivers
-
-        source_db_connector.connect_to_db(self.source_db_driver,
+        source_db_connector.connect_to_db(source_frame.db_dropdown.get(),
                                      source_frame.user_input.get(),
                                      source_frame.password_input.get(),
                                      source_frame.host_input.get(),
                                      source_frame.database_name_input.get())
-        destination_db_connector.connect_to_db(self.destination_db_driver,
+        destination_db_connector.connect_to_db(destination_frame.db_dropdown.get(),
                                           destination_frame.user_input.get(),
                                           destination_frame.password_input.get(),
                                           destination_frame.host_input.get(),
@@ -430,6 +513,9 @@ class ResultFrame:
 
 if __name__ == '__main__':
     try:
+        # with open(f'{dev_profiles_dir}\\test3.json', 'r') as file:
+        #     json_input = json.load(file)
+
         root = tk.Tk()
         app = App(root)
 
