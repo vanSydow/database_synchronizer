@@ -2,6 +2,7 @@ import traceback
 import json
 import os
 import glob
+import pandas as pd
 from time import sleep
 from sqlalchemy import create_engine
 import tkinter as tk
@@ -10,6 +11,7 @@ from tkinter import messagebox
 from tkinter import filedialog
 
 
+# pip install pandas
 # pip install SQLAlchemy
 # pip install PyMySQL
 # pip install psycopg2
@@ -39,7 +41,7 @@ class App():
         source_frame = DBConnectionFrame(root, shared_data, 'Source')
         destination_frame = DBConnectionFrame(root, shared_data, 'Destination')
         result_frame = ResultFrame(root, shared_data, destination_db_connector)
-        compare_frame = CompareFrame(root, shared_data, source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame)
+        compare_frame = CompareFrame(root, shared_data, source_db_connector, destination_db_connector, profile_frame, source_frame, destination_frame, result_frame)
 
 
 class SharedData:
@@ -81,6 +83,11 @@ class DBConnector:
             except Exception:
                 print(f'{statement} does not return values.')
                 return None
+        return result
+
+    def execute_statement_pd(self, statement):
+        with self.engine.connect() as connection:
+            result = pd.read_sql(statement, connection)
         return result
 
     # TODO: add other databases
@@ -226,18 +233,18 @@ class DBConnectionFrame:
 
 
 class CompareFrame:
-    def __init__(self, root, shared_data, source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame):
+    def __init__(self, root, shared_data, source_db_connector, destination_db_connector, profile_frame, source_frame, destination_frame, result_frame):
         self.frame = tk.Frame(root, width=600, height=100)
         self.frame.pack(side='bottom')
-        self.init_button = ttk.Button(self.frame, text='Initialize DBs', command=lambda: self.init_dbs(source_db_connector, source_frame))
-        self.init_button.grid(row=0, column=0)
-        self.get_changes_button = ttk.Button(self.frame, text='Get DB changes', command=lambda:self.get_changes())
-        self.get_changes_button.grid(row=1, column=0)
-        self.compare_db_button = ttk.Button(self.frame, text='Compare Databases',
+        self.compare_db_button = ttk.Button(self.frame, text='Compare DBs',
                                             command=lambda:self.compare_db(source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame, shared_data))
-        self.compare_db_button.grid(row=2, column=0)
+        self.compare_db_button.grid(row=0, column=0)
+        self.init_button = ttk.Button(self.frame, text='Initialize DBs', command=lambda: self.init_dbs(source_db_connector, source_frame, destination_frame))
+        self.init_button.grid(row=1, column=0)
+        self.apply_changes_button = ttk.Button(self.frame, text='Apply DB changes', command=lambda: self.apply_changes(shared_data, profile_frame, source_db_connector, source_frame))
+        self.apply_changes_button.grid(row=2, column=0)
 
-    def init_dbs(self, source_db_connector, source_frame):
+    def init_dbs(self, source_db_connector, source_frame, destination_frame):
         mb_answer = messagebox.askquestion(
             'Initialize DBs',
             f'Would you like to create a new profile and initialize it with the given database credentials?\n'
@@ -245,19 +252,19 @@ class CompareFrame:
         )
         if mb_answer == 'yes':
             file_output = {
-                DBConnectionFrame.instances[0].src_dst : {
-                    'db_type': DBConnectionFrame.instances[0].db_dropdown.get(),
-                    'host': DBConnectionFrame.instances[0].host_input.get(),
-                    'db_name': DBConnectionFrame.instances[0].database_name_input.get(),
-                    'username': DBConnectionFrame.instances[0].user_input.get(),
-                    'password': DBConnectionFrame.instances[0].password_input.get()
+                source_frame.src_dst : {
+                    'db_type': source_frame.db_dropdown.get(),
+                    'host': source_frame.host_input.get(),
+                    'db_name': source_frame.database_name_input.get(),
+                    'username': source_frame.user_input.get(),
+                    'password': source_frame.password_input.get()
                 },
-                DBConnectionFrame.instances[1].src_dst: {
-                    'db_type': DBConnectionFrame.instances[1].db_dropdown.get(),
-                    'host': DBConnectionFrame.instances[1].host_input.get(),
-                    'db_name': DBConnectionFrame.instances[1].database_name_input.get(),
-                    'username': DBConnectionFrame.instances[1].user_input.get(),
-                    'password': DBConnectionFrame.instances[1].password_input.get()
+                destination_frame.src_dst: {
+                    'db_type': destination_frame.db_dropdown.get(),
+                    'host': destination_frame.host_input.get(),
+                    'db_name': destination_frame.database_name_input.get(),
+                    'username': destination_frame.user_input.get(),
+                    'password': destination_frame.password_input.get()
                 }
             }
 
@@ -267,7 +274,7 @@ class CompareFrame:
                                             source_frame.host_input.get(),
                                             source_frame.database_name_input.get())
 
-            query_result = source_db_connector.execute_statement(
+            query_result = source_db_connector.execute_statement_pd(
                 f"select pn.oid as schema_id, pn.nspname as schema_name, pc.oid as table_id, pc.relname as table_name, pa.attname as column_name, pa.atttypid as data_type_id, pt.typname as data_type_name "
                 f"from pg_catalog.pg_namespace pn "
                 f"join pg_catalog.pg_class pc on pn.oid = pc.relnamespace "
@@ -279,69 +286,172 @@ class CompareFrame:
                 f"order by pn.oid, pc.oid;"
             )
 
-            if not query_result:
+            if query_result.empty:
                 messagebox.showerror('Error', 'Source database is empty.')
                 return -1
 
             # init dicts with first row
-            schema_list = []
-            column_dict = {
-                'column_name': query_result[0][4],
-                'data_type_id': query_result[0][5],
-                'data_type_name': query_result[0][6]
-            }
-            table_dict = {
-                'table_id': query_result[0][2],
-                'table_name': query_result[0][3],
-                'columns': [column_dict]
-            }
-            schema_dict = {
-                'schema_id': query_result[0][0],
-                'schema_name': query_result[0][1],
-                'tables': []
-            }
+            # schema_list = []
+            # column_dict = {
+            #     'column_name': query_result[0][4],
+            #     'data_type_id': query_result[0][5],
+            #     'data_type_name': query_result[0][6]
+            # }
+            # table_dict = {
+            #     'table_id': query_result[0][2],
+            #     'table_name': query_result[0][3],
+            #     'columns': [column_dict]
+            # }
+            # schema_dict = {
+            #     'schema_id': query_result[0][0],
+            #     'schema_name': query_result[0][1],
+            #     'tables': []
+            # }
+            #
+            # for row in query_result[1:]:
+            #     column_dict = {
+            #         'column_name': row[4],
+            #         'data_type_id': row[5],
+            #         'data_type_name': row[6]
+            #     }
+            #
+            #     # new table
+            #     if row[2] not in table_dict.values():
+            #         schema_dict['tables'].append(table_dict)
+            #         table_dict = {
+            #             'table_id': row[2],
+            #             'table_name': row[3],
+            #             'columns': [column_dict]
+            #         }
+            #     # existing table
+            #     else:
+            #         table_dict['columns'].append(column_dict)
+            #
+            #     # new schema
+            #     if row[0] not in schema_dict.values():
+            #         schema_list.append(schema_dict)
+            #         schema_dict = {
+            #             'schema_id': row[0],
+            #             'schema_name': row[1],
+            #             'tables': []
+            #         }
+            #
+            # # write dicts after last row
+            # schema_dict['tables'].append(table_dict)
+            # schema_list.append(schema_dict)
+            #
+            # file_output['source_struct'] = schema_list
 
-            for row in query_result[1:]:
-                column_dict = {
-                    'column_name': row[4],
-                    'data_type_id': row[5],
-                    'data_type_name': row[6]
-                }
+            file_output['source_struct'] = query_result.to_dict()
 
-                # new table
-                if row[2] not in table_dict.values():
-                    schema_dict['tables'].append(table_dict)
-                    table_dict = {
-                        'table_id': row[2],
-                        'table_name': row[3],
-                        'columns': [column_dict]
-                    }
-                # existing table
-                else:
-                    table_dict['columns'].append(column_dict)
-
-                # new schema
-                if row[0] not in schema_dict.values():
-                    schema_list.append(schema_dict)
-                    schema_dict = {
-                        'schema_id': row[0],
-                        'schema_name': row[1],
-                        'tables': []
-                    }
-
-            # write dicts after last row
-            schema_dict['tables'].append(table_dict)
-            schema_list.append(schema_dict)
-
-            file_output['source_struct'] = schema_list
             json_output = json.dumps(file_output, indent=4)
             filetypes = [('JSON files', '*.json')]
             filename = filedialog.asksaveasfile(title='Save profile', initialdir=dev_profiles_dir, filetypes=filetypes, defaultextension='.json')
             filename.write(json_output)
 
 
-    def get_changes(self):
-        pass
+    def apply_changes(self, shared_data, profile_frame, source_db_connector, source_frame):
+        # get current source table structure
+        source_db_connector.connect_to_db(source_frame.db_dropdown.get(),
+                                          source_frame.user_input.get(),
+                                          source_frame.password_input.get(),
+                                          source_frame.host_input.get(),
+                                          source_frame.database_name_input.get())
+
+        new_source_struct = source_db_connector.execute_statement_pd(
+            f"select pn.oid as schema_id, pn.nspname as schema_name, pc.oid as table_id, pc.relname as table_name, pa.attname as column_name, pa.atttypid as data_type_id, pt.typname as data_type_name "
+            f"from pg_catalog.pg_namespace pn "
+            f"join pg_catalog.pg_class pc on pn.oid = pc.relnamespace "
+            f"join pg_catalog.pg_attribute pa on pc.oid = pa.attrelid "
+            f"join pg_catalog.pg_type pt on pa.atttypid = pt.oid "
+            f"where "
+            f"    pn.nspname not like 'pg_%%' and pn.nspname != 'information_schema' and "
+            f"    attname not in ('cmax', 'cmin', 'ctid', 'tableoid', 'xmax', 'xmin') "
+            f"order by pn.oid, pc.oid;"
+        )
+
+        if new_source_struct.empty:
+            messagebox.showerror('Error', 'Source database is empty.')
+            return -1
+
+        # open old source table structure
+        with open(f'{dev_profiles_dir}\\{profile_frame.profile_text.get()}') as file:
+            json_input = json.load(file)
+        old_source_struct = pd.DataFrame.from_dict(json_input['source_struct'])
+
+        # TODO: speed optimization
+        changes = []    # old_schema_name, new_schema_name, old_table_name, new_table_name, old_colun_name, new_column_name, old_data_type_name, new_data_type_name, cdc (I, U, D and S, T, C, D)
+
+        # check if new schema has been added
+        new_schema_ids = new_source_struct.schema_id.unique()
+
+
+
+        old_schema_ids = old_source_struct.schema_id.unique()
+        for old_schema_id in old_schema_ids:
+            old_schema_filtered = old_source_struct.loc[old_source_struct['schema_id'] == old_schema_id]
+            new_schema_filtered = new_source_struct.loc[new_source_struct['schema_id'] == old_schema_id]
+
+            # check if old schema still exists
+            if old_schema_id not in new_source_struct['schema_id']:
+                changes.append([old_schema_filtered.loc(0, 'schema_name'), None, None, None, None, None, None, None, 'DS'])
+
+            # check if schema has been renamed
+            else:
+                if old_schema_filtered.loc(0, 'schema_name') != new_schema_filtered.loc(0, 'schema_name'):
+                    changes.append([old_schema_filtered.loc(0, 'schema_name'),
+                                    new_schema_filtered.loc(0, 'schema_name'),
+                                    None, None, None, None, None, None, 'US'])
+
+
+                old_table_ids = old_schema_filtered.schema_id.unique()
+                for old_table_id in old_table_ids:
+                    old_table_filtered = old_schema_filtered[old_schema_filtered['table_id'] == old_table_id]
+
+                    # check of table still exists
+                    if old_table_id not in new_schema_filtered['table_id']:
+                        changes.append([old_schema_filtered.loc(0, 'schema_name'),
+                                        new_schema_filtered.loc(0, 'schema_name'),
+                                        old_table_filtered.loc(0, 'table_name'),
+                                        None, None, None, None, None, 'DT'])
+
+                    # check if table has been renamed
+                    else:
+                        new_table_filtered = new_schema_filtered[new_schema_filtered['table_id'] == old_table_id]
+                        if old_table_filtered.loc(0, 'table_name') != new_table_filtered.loc(0, 'table_name'):
+                            changes.append([old_schema_filtered.loc(0, 'schema_name'),
+                                            new_schema_filtered.loc(0, 'schema_name'),
+                                            old_table_filtered.loc(0, 'table_name'),
+                                            new_table_filtered.loc(0, 'table_name'),
+                                            None, None, None, None, 'UT'])
+
+                        for new_column in new_table_filtered:
+                            # insert new (or renamed) column - not sure because of lack of column id
+                            if new_column.loc(0, 'column_name') not in old_table_filtered['column_name']:
+                                changes.append([old_schema_filtered.loc(0, 'schema_name'),
+                                                new_schema_filtered.loc(0, 'schema_name'),
+                                                old_table_filtered.loc(0, 'table_name'),
+                                                new_table_filtered.loc(0, 'table_name'),
+                                                None,
+                                                new_column.loc(0, 'column_name'),
+                                                None,
+                                                new_column.loc(0, 'data_type_name'),
+                                                'IC'])
+
+                            # check if data type of existing column has changed
+                            else:
+                                old_column = old_table_filtered[old_table_filtered['column_name'] == new_column.loc(0, 'column_name')]
+                                if new_column.loc(0, 'data_type_name') != old_column.loc(0, 'data_type_name'):
+                                    changes.append([old_schema_filtered.loc(0, 'schema_name'),
+                                                    new_schema_filtered.loc(0, 'schema_name'),
+                                                    old_table_filtered.loc(0, 'table_name'),
+                                                    new_table_filtered.loc(0, 'table_name'),
+                                                    None,
+                                                    new_column.loc(0, 'column_name'),
+                                                    old_column.loc(0, 'data_type_name'),
+                                                    new_column.loc(0, 'data_type_name'),
+                                                    'UD'])
+
 
 
     def print_table_structures(self, database_name, table_structures, view_structures):
