@@ -50,6 +50,7 @@ class SharedData:
         self.new_tables = []
         self.deleted_tables = []
         self.altered_tables = []
+        self.shared_data = []
 
 
 class DBConnector:
@@ -241,8 +242,8 @@ class CompareFrame:
         self.compare_db_button.grid(row=0, column=0)
         self.init_button = ttk.Button(self.frame, text='Initialize DBs', command=lambda: self.init_dbs(source_db_connector, source_frame, destination_frame))
         self.init_button.grid(row=1, column=0)
-        self.apply_changes_button = ttk.Button(self.frame, text='Apply DB changes', command=lambda: self.apply_changes(shared_data, profile_frame, source_db_connector, source_frame))
-        self.apply_changes_button.grid(row=2, column=0)
+        self.apply_structure_changes_button = ttk.Button(self.frame, text='Apply DB changes', command=lambda: self.apply_structure_changes(shared_data, profile_frame, source_db_connector, source_frame, destination_frame))
+        self.apply_structure_changes_button.grid(row=2, column=0)
 
     def init_dbs(self, source_db_connector, source_frame, destination_frame):
         mb_answer = messagebox.askquestion(
@@ -350,7 +351,7 @@ class CompareFrame:
             filename.write(json_output)
 
 
-    def apply_changes(self, shared_data, profile_frame, source_db_connector, source_frame):
+    def apply_structure_changes(self, shared_data, profile_frame, source_db_connector, source_frame, destination_frame):
         # get current source table structure
         source_db_connector.connect_to_db(source_frame.db_dropdown.get(),
                                           source_frame.user_input.get(),
@@ -380,77 +381,169 @@ class CompareFrame:
         old_source_struct = pd.DataFrame.from_dict(json_input['source_struct'])
 
         # TODO: speed optimization
-        changes = []    # old_schema_name, new_schema_name, old_table_name, new_table_name, old_colun_name, new_column_name, old_data_type_name, new_data_type_name, cdc (I, U, D and S, T, C, D)
+        shared_data.structure_changes = []    # old_schema_name, new_schema_name, old_table_name, new_table_name, old_colun_name, new_column_name, old_data_type_name, new_data_type_name, cdc (I, U, D and S, T, C, D)
 
-        # check if new schema has been added
-        new_schema_ids = new_source_struct.schema_id.unique()
-
-
-
+        # check if new schemas have been added
         old_schema_ids = old_source_struct.schema_id.unique()
+        new_schema_ids_only = pd.merge(old_source_struct['schema_id'], new_source_struct['schema_id'], on='schema_id', how='right', indicator=True).query('_merge=="right_only"')
+        new_schema_ids_only = new_schema_ids_only.schema_id.unique()
+
+        # add new schemas
+        for new_schema_id in new_schema_ids_only:
+            new_schema_filtered = new_source_struct.loc[new_source_struct['schema_id'] == new_schema_id]
+            shared_data.structure_changes.append([
+                None, new_schema_filtered.iloc[0]['schema_name'],
+                None, None, None, None, None, None, 'IS'
+            ])
+
+            # add new tables
+            new_table_ids = new_schema_filtered.table_id.unique()
+            for new_table_id in new_table_ids:
+                new_table_filtered = new_schema_filtered[new_schema_filtered['table_id'] == new_table_id]
+                shared_data.structure_changes.append([
+                    None, new_schema_filtered.iloc[0]['schema_name'],
+                    None, new_table_filtered.iloc[0]['table_name'],
+                    None, None, None, None, 'IT'
+                ])
+
+                # add new columns
+                for column in new_table_filtered.itertuples(index=False):
+                    shared_data.structure_changes.append([
+                        None, new_schema_filtered.iloc[0]['schema_name'],
+                        None, new_table_filtered.iloc[0]['table_name'],
+                        None, column.column_name,
+                        None, column.data_type_name,
+                        'IC'
+                    ])
+
         for old_schema_id in old_schema_ids:
             old_schema_filtered = old_source_struct.loc[old_source_struct['schema_id'] == old_schema_id]
-            new_schema_filtered = new_source_struct.loc[new_source_struct['schema_id'] == old_schema_id]
 
-            # check if old schema still exists
-            if old_schema_id not in new_source_struct['schema_id']:
-                changes.append([old_schema_filtered.loc(0, 'schema_name'), None, None, None, None, None, None, None, 'DS'])
+            # check if old schemas have been deleted
+            if old_schema_id not in new_source_struct['schema_id'].to_numpy():
+                shared_data.structure_changes.append([
+                    old_schema_filtered.iloc[0]['schema_name'], None,
+                    None, None, None, None, None, None, 'DS'
+                ])
 
-            # check if schema has been renamed
+            # old schema still exists
             else:
-                if old_schema_filtered.loc(0, 'schema_name') != new_schema_filtered.loc(0, 'schema_name'):
-                    changes.append([old_schema_filtered.loc(0, 'schema_name'),
-                                    new_schema_filtered.loc(0, 'schema_name'),
-                                    None, None, None, None, None, None, 'US'])
+                new_schema_filtered = new_source_struct.loc[new_source_struct['schema_id'] == old_schema_id]
+
+                # check if schemas have been renamed
+                if old_schema_filtered.iloc[0]['schema_name'] != new_schema_filtered.iloc[0]['schema_name']:
+                    shared_data.structure_changes.append([
+                        old_schema_filtered.iloc[0]['schema_name'], new_schema_filtered.iloc[0]['schema_name'],
+                        None, None, None, None, None, None, 'US'
+                    ])
+
+                # check if new tables have been added
+                old_table_ids = old_schema_filtered.table_id.unique()
+                new_table_ids_only = pd.merge(old_schema_filtered['table_id'], new_schema_filtered['table_id'], on='table_id', how='right', indicator=True).query('_merge=="right_only"')
+                new_table_ids_only = new_table_ids_only.table_id.unique()
+
+                # add new tables
+                for new_table_id in new_table_ids_only:
+                    new_table_filtered = new_schema_filtered[new_schema_filtered['table_id'] == new_table_id]
+                    shared_data.structure_changes.append([
+                        None, new_schema_filtered.iloc[0]['schema_name'],
+                        None, new_table_filtered.iloc[0]['table_name'],
+                        None, None, None, None, 'IT'
+                    ])
+
+                    # add new columns
+                    for new_column in new_table_filtered.itertuples(index=False):
+                        shared_data.structure_changes.append([
+                            None, new_schema_filtered.iloc[0]['schema_name'],
+                            None, new_table_filtered.iloc[0]['table_name'],
+                            None, new_column.column_name,
+                            None, new_column.data_type_name,
+                            'IC'
+                        ])
 
 
-                old_table_ids = old_schema_filtered.schema_id.unique()
                 for old_table_id in old_table_ids:
                     old_table_filtered = old_schema_filtered[old_schema_filtered['table_id'] == old_table_id]
 
-                    # check of table still exists
-                    if old_table_id not in new_schema_filtered['table_id']:
-                        changes.append([old_schema_filtered.loc(0, 'schema_name'),
-                                        new_schema_filtered.loc(0, 'schema_name'),
-                                        old_table_filtered.loc(0, 'table_name'),
-                                        None, None, None, None, None, 'DT'])
+                    # check if old tables have been deleted
+                    if old_table_id not in new_schema_filtered['table_id'].to_numpy():
+                        shared_data.structure_changes.append([
+                            old_schema_filtered.iloc[0]['schema_name'], new_schema_filtered.iloc[0]['schema_name'],
+                            old_table_filtered.iloc[0]['table_name'], None,
+                            None, None, None, None, 'DT'
+                        ])
 
-                    # check if table has been renamed
+                    # old table still exists
                     else:
                         new_table_filtered = new_schema_filtered[new_schema_filtered['table_id'] == old_table_id]
-                        if old_table_filtered.loc(0, 'table_name') != new_table_filtered.loc(0, 'table_name'):
-                            changes.append([old_schema_filtered.loc(0, 'schema_name'),
-                                            new_schema_filtered.loc(0, 'schema_name'),
-                                            old_table_filtered.loc(0, 'table_name'),
-                                            new_table_filtered.loc(0, 'table_name'),
-                                            None, None, None, None, 'UT'])
 
-                        for new_column in new_table_filtered:
+                        # check if table has been renamed
+                        if old_table_filtered.iloc[0]['table_name'] != new_table_filtered.iloc[0]['table_name']:
+                            shared_data.structure_changes.append([
+                                old_schema_filtered.iloc[0]['schema_name'], new_schema_filtered.iloc[0]['schema_name'],
+                                old_table_filtered.iloc[0]['table_name'], new_table_filtered.iloc[0]['table_name'],
+                                None, None, None, None, 'UT'
+                            ])
+    
+                        for new_column in new_table_filtered.itertuples(index=False):
                             # insert new (or renamed) column - not sure because of lack of column id
-                            if new_column.loc(0, 'column_name') not in old_table_filtered['column_name']:
-                                changes.append([old_schema_filtered.loc(0, 'schema_name'),
-                                                new_schema_filtered.loc(0, 'schema_name'),
-                                                old_table_filtered.loc(0, 'table_name'),
-                                                new_table_filtered.loc(0, 'table_name'),
-                                                None,
-                                                new_column.loc(0, 'column_name'),
-                                                None,
-                                                new_column.loc(0, 'data_type_name'),
-                                                'IC'])
+                            if new_column.column_name not in old_table_filtered['column_name'].to_numpy():
+                                shared_data.structure_changes.append([
+                                    old_schema_filtered.iloc[0]['schema_name'], new_schema_filtered.iloc[0]['schema_name'],
+                                    old_table_filtered.iloc[0]['table_name'], new_table_filtered.iloc[0]['table_name'],
+                                    None, new_column.column_name,
+                                    None, new_column.data_type_name,
+                                    'IC'
+                                ])
 
                             # check if data type of existing column has changed
                             else:
-                                old_column = old_table_filtered[old_table_filtered['column_name'] == new_column.loc(0, 'column_name')]
-                                if new_column.loc(0, 'data_type_name') != old_column.loc(0, 'data_type_name'):
-                                    changes.append([old_schema_filtered.loc(0, 'schema_name'),
-                                                    new_schema_filtered.loc(0, 'schema_name'),
-                                                    old_table_filtered.loc(0, 'table_name'),
-                                                    new_table_filtered.loc(0, 'table_name'),
-                                                    None,
-                                                    new_column.loc(0, 'column_name'),
-                                                    old_column.loc(0, 'data_type_name'),
-                                                    new_column.loc(0, 'data_type_name'),
-                                                    'UD'])
+                                old_column = old_table_filtered[old_table_filtered['column_name'] == new_column.column_name]
+                                if new_column.data_type_name != old_column.iloc[0]['data_type_name']:
+                                    shared_data.structure_changes.append([
+                                        old_schema_filtered.iloc[0]['schema_name'], new_schema_filtered.iloc[0]['schema_name'],
+                                        old_table_filtered.iloc[0]['table_name'], new_table_filtered.iloc[0]['table_name'],
+                                        old_column.iloc[0]['column_name'], new_column.column_name,
+                                        old_column.iloc[0]['data_type_name'], new_column.data_type_name,
+                                        'UD'
+                                    ])
+
+        self.generate_ddl_script(shared_data.structure_changes, destination_frame.db_dropdown.get())
+
+    def generate_ddl_script(self, structure_changes, database_name):
+        if structure_changes:
+            ddl_script = ''
+            if database_name == postgres:
+                for row in structure_changes:
+                    print(row)
+                    if row[8] == 'IS':
+                        ddl_script += f'CREATE SCHEMA {row[1]};\n\n'
+                    elif row[8] == 'IT':
+                        ddl_script += f'CREATE TABLE {row[1]}.{row[3]};\n\n'
+                    elif row[8] == 'IC' or row[-1] == 'UC':
+                        ddl_script += f'ALTER TABLE {row[1]}.{row[3]}\n' \
+                                      f'ADD {row[5]} {row[7]};\n\n'
+                    elif row[8] == 'US':
+                        ddl_script += f'ALTER SCHEMA {row[0]}\n' \
+                                      f'RENAME TO {row[1]};\n\n'
+                    elif row[8] == 'UT':
+                        ddl_script += f'ALTER TABLE {row[2]}\n' \
+                                      f'RENAME TO {row[3]};\n\n'
+                    elif row[8] == 'UD':
+                        ddl_script += f'ALTER TABLE {row[3]}\n' \
+                                      f'MODIFY COLUMN {row[5]} {row[7]};\n\n'
+                    elif row[8] == 'DS':
+                        ddl_script += f'DROP SCHEMA IF EXISTS {row[0]};\n\n'
+                    elif row[8] == 'DT':
+                        ddl_script += f'DROP TABLE IF EXISTS {row[2]};\n\n'
+                    else:
+                        ddl_script += '\n-- unhandled action\n'
+
+            print(ddl_script)
+
+        else:
+            print('no changes')
+
 
 
 
@@ -566,7 +659,7 @@ class CompareFrame:
 class ResultFrame:
     def __init__(self, root, shared_data, destination_db_connector):
         self.frame = tk.Frame(root, width=580, height=250, padx=10, pady=10)
-        self.deploy_button = ttk.Button(self.frame, text='Deploy changes to database', command=lambda:self.deploy_to_database(shared_data, destination_db_connector))
+        self.deploy_button = ttk.Button(self.frame, text='Deploy shared_data.structure_changes to database', command=lambda:self.deploy_to_database(shared_data, destination_db_connector))
         self.deploy_button.pack(side='bottom')
         self.generate_script_button = ttk.Button(self.frame, text='Generate script', command=lambda:self.ddl_script_to_file(shared_data))
         self.generate_script_button.pack(side='bottom')
@@ -610,7 +703,7 @@ class ResultFrame:
             if not self.ddl_script.strip():
                 messagebox.showinfo('DDL Script Deployment', 'Nothing to deploy ;)')
             else:
-                mb_answer = messagebox.askquestion('Deploy changes', f'Deploy changes to {db_connector_destination.host}/{db_connector_destination.database} ?')
+                mb_answer = messagebox.askquestion('Deploy shared_data.structure_changes', f'Deploy shared_data.structure_changes to {db_connector_destination.host}/{db_connector_destination.database} ?')
                 if mb_answer == 'yes':
                     for statement in self.ddl_script.split(';'):    # need for multi statements
                         if statement: db_connector_destination.execute_statement(f'{statement};')
