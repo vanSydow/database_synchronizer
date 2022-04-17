@@ -41,7 +41,7 @@ class App():
         profile_frame = ProfileFrame(root)
         source_frame = DBConnectionFrame(root, 'Source')
         destination_frame = DBConnectionFrame(root, 'Destination')
-        result_frame = ResultFrame(root, destination_db_connector)
+        result_frame = ResultFrame(root, destination_db_connector, destination_frame)
         compare_frame = CompareFrame(root, source_db_connector, destination_db_connector, profile_frame, source_frame, destination_frame, result_frame)
 
 
@@ -244,7 +244,7 @@ class CompareFrame:
         self.compare_db_button.grid(row=0, column=0)
         self.init_button = ttk.Button(self.frame, text='Initialize DBs', command=lambda: self.init_dbs(source_db_connector, source_frame, destination_frame))
         self.init_button.grid(row=1, column=0)
-        self.source_structure_changes_button = ttk.Button(self.frame, text='Get source DB changes', command=lambda: self.source_structure_changes(profile_frame, source_db_connector, source_frame, destination_frame, result_frame))
+        self.source_structure_changes_button = ttk.Button(self.frame, text='Get source DB changes', command=lambda: self.source_structure_changes(source_db_connector, profile_frame, source_frame, destination_frame, result_frame))
         self.source_structure_changes_button.grid(row=2, column=0)
 
     def init_dbs(self, source_db_connector, source_frame, destination_frame):
@@ -299,7 +299,7 @@ class CompareFrame:
             with filedialog.asksaveasfile(title='Save profile', initialdir=dev_profiles_dir, filetypes=filetypes, defaultextension='.json') as file:
                 file.write(json_output)
 
-    def source_structure_changes(self, profile_frame, source_db_connector, source_frame, destination_frame, result_frame):
+    def source_structure_changes(self, source_db_connector, profile_frame, source_frame, destination_frame, result_frame):
         # get current source table structure
         source_db_connector.connect_to_db(source_frame.db_dropdown.get(),
                                           source_frame.user_input.get(),
@@ -460,6 +460,7 @@ class CompareFrame:
         source_frame.frame.pack_forget()
         destination_frame.frame.pack_forget()
         self.frame.pack_forget()
+        result_frame.destination_db_connector = destination_frame
         result_frame.frame.pack(side='top')
 
     # def print_table_structures(self, database_name, table_structures, view_structures):
@@ -571,18 +572,25 @@ class CompareFrame:
 
 
 class ResultFrame:
-    def __init__(self, root, destination_db_connector):
+    def __init__(self, root, destination_db_connector, destination_frame):
         self.frame = tk.Frame(root, width=580, height=250, padx=10, pady=10)
         self.result_text = tk.Text(self.frame, width=window_width, height=14)   # width in letters and height in text lines
         self.result_text.pack()
         self.generate_script_button = ttk.Button(self.frame, text='Generate script', command=lambda:self.ddl_script_to_file())
         self.generate_script_button.pack()
-        self.deploy_button = ttk.Button(self.frame, text='Deploy changes to database', command=lambda:self.deploy_to_database(destination_db_connector))
+        self.deploy_button = ttk.Button(self.frame, text='Deploy changes to database')#, command=lambda:self.deploy_to_database(destination_db_connector))
         self.deploy_button.pack()
         self.ddl_script = ''
-        self.frame.bind('<Map>', lambda event: self.generate_ddl_script())
+        self.frame.bind('<Map>', lambda event: self.generate_ddl_script(destination_db_connector, destination_frame))
 
-    def generate_ddl_script(self):
+    def generate_ddl_script(self, destination_db_connector, destination_frame):
+        destination_db_connector.connect_to_db(destination_frame.db_dropdown.get(),
+                                               destination_frame.user_input.get(),
+                                               destination_frame.password_input.get(),
+                                               destination_frame.host_input.get(),
+                                               destination_frame.database_name_input.get())
+
+        self.deploy_button.configure(command=lambda:self.deploy_to_database(destination_db_connector))
         if SharedData.structure_changes:
             self.ddl_script = ''
             if SharedData.database_type == postgres:
@@ -591,7 +599,7 @@ class ResultFrame:
                     if row[8] == 'IS':
                         self.ddl_script += f'CREATE SCHEMA {row[1]};\n\n'
                     elif row[8] == 'IT':
-                        self.ddl_script += f'CREATE TABLE {row[1]}.{row[3]};\n\n'
+                        self.ddl_script += f'CREATE TABLE {row[1]}.{row[3]}();\n\n'
                     elif row[8] == 'IC' or row[-1] == 'UC':
                         self.ddl_script += f'ALTER TABLE {row[1]}.{row[3]}\n' \
                                       f'ADD {row[5]} {row[7]};\n\n'
@@ -599,17 +607,18 @@ class ResultFrame:
                         self.ddl_script += f'ALTER SCHEMA {row[0]}\n' \
                                       f'RENAME TO {row[1]};\n\n'
                     elif row[8] == 'UT':
-                        self.ddl_script += f'ALTER TABLE {row[2]}\n' \
+                        self.ddl_script += f'ALTER TABLE {row[0]}.{row[2]}\n' \
                                       f'RENAME TO {row[3]};\n\n'
                     elif row[8] == 'UD':
-                        self.ddl_script += f'ALTER TABLE {row[3]}\n' \
-                                      f'MODIFY COLUMN {row[5]} {row[7]};\n\n'
+                        self.ddl_script += f'ALTER TABLE {row[1]}.{row[3]}\n' \
+                                      f'ALTER COLUMN {row[5]} TYPE {row[7]};\n\n'
                     elif row[8] == 'DS':
                         self.ddl_script += f'DROP SCHEMA IF EXISTS {row[0]};\n\n'
                     elif row[8] == 'DT':
                         self.ddl_script += f'DROP TABLE IF EXISTS {row[2]};\n\n'
                     else:
-                        self.ddl_script += f'\n-- unhandled action for {row}\n'
+                        self.ddl_script += f'-- unhandled action for {row}\n\n'
+            self.ddl_script = self.ddl_script[:-2]      # delete last linebreaks
             print(self.ddl_script)
 
         else:
@@ -623,23 +632,21 @@ class ResultFrame:
                 filetypes = [('SQL files', '*.sql')]
                 with filedialog.asksaveasfile(title='Save profile', initialdir=dev_profiles_dir, filetypes=filetypes, defaultextension='.json') as file:
                     file.write(self.ddl_script)
-                messagebox.showinfo('DDL Script Generation', 'DDL script generated sucessfully :)')
+                # messagebox.showinfo('DDL Script Generation', 'DDL script generated sucessfully :)')
 
         except Exception:
             messagebox.showerror('DDL Script Generation', 'DDL script generation failed :(')
             traceback.print_exc()
 
-    def deploy_to_database(self, db_connector_destination):
-        # self.generate_ddl_script(shared_data.structure_changes, destination_frame.db_dropdown.get())
+    def deploy_to_database(self, destination_db_connector):
         try:
-            self.generate_ddl_script()
             if not self.ddl_script.strip():
                 messagebox.showinfo('DDL Script Deployment', 'Nothing to deploy ;)')
             else:
-                mb_answer = messagebox.askquestion('Deploy structure changes', f'Deploy structure changes to {db_connector_destination.host}/{db_connector_destination.database} ?')
+                mb_answer = messagebox.askquestion('Deploy structure changes', f'Deploy structure changes to {destination_db_connector.host}/{destination_db_connector.database} ?')
                 if mb_answer == 'yes':
                     for statement in self.ddl_script.split(';'):    # need for multi statements
-                        if statement: db_connector_destination.execute_statement(f'{statement};')
+                        if statement: destination_db_connector.execute_statement(f'{statement};')
                     messagebox.showinfo('DDL Script Deployment', 'DDL script deployment sucessfully :)')
 
         except Exception:
