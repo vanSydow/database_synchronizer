@@ -23,7 +23,8 @@ prod_util_dir = f'{os.getcwd()}\\util'
 prod_profiles_dir = f'{os.getcwd()}\\profiles'
 prod_ddl_scripts_dir = f'{os.getcwd()}\\ddl_scripts'
 
-
+window_width = 600
+window_height = 300
 maria_db = 'MariaDB'
 mysql = 'MySQL'
 postgres = 'PostgreSQL'
@@ -32,25 +33,25 @@ postgres = 'PostgreSQL'
 class App():
     def __init__(self, root):
         root.title('Database Synchronizer')
-        root.geometry('600x300')
+        root.geometry(f'{window_width}x{window_height}')
 
-        shared_data = SharedData()
+        # shared_data = SharedData()
         source_db_connector = DBConnector()
         destination_db_connector = DBConnector()
-        profile_frame = ProfileFrame(root, shared_data)
-        source_frame = DBConnectionFrame(root, shared_data, 'Source')
-        destination_frame = DBConnectionFrame(root, shared_data, 'Destination')
-        result_frame = ResultFrame(root, shared_data, destination_db_connector)
-        compare_frame = CompareFrame(root, shared_data, source_db_connector, destination_db_connector, profile_frame, source_frame, destination_frame, result_frame)
+        profile_frame = ProfileFrame(root)
+        source_frame = DBConnectionFrame(root, 'Source')
+        destination_frame = DBConnectionFrame(root, 'Destination')
+        result_frame = ResultFrame(root, destination_db_connector)
+        compare_frame = CompareFrame(root, source_db_connector, destination_db_connector, profile_frame, source_frame, destination_frame, result_frame)
 
 
 class SharedData:
-    def __init__(self):
-        self.profile = {}
-        self.new_tables = []
-        self.deleted_tables = []
-        self.altered_tables = []
-        self.shared_data = []
+    profile = {}
+    new_tables = []
+    deleted_tables = []
+    altered_tables = []
+    structure_changes = []
+    database_type = ''
 
 
 class DBConnector:
@@ -62,6 +63,7 @@ class DBConnector:
         if db_driver == maria_db: self.db_driver = 'mysql+pymysql'
         elif db_driver == postgres: self.db_driver = 'postgresql'
         # TODO: add other database drivers
+        SharedData.database_type = db_driver
         self.user = user
         self.password = password
         self.host = host
@@ -112,15 +114,15 @@ class DBConnector:
 
 
 class ProfileFrame:
-    def __init__(self, root, shared_data):
-        self.frame = tk.Frame(root, width=600, height=100)
+    def __init__(self, root):
+        self.frame = tk.Frame(root, width=window_width, height=50)
         self.frame.pack(side='top', anchor='w')
         self.profile_header_label = tk.Label(self.frame, text=f'Profile selected:')
         self.profile_header_label.grid(row=0, column=0)
         self.profile_text = tk.StringVar()
         self.profile_text_label = tk.Label(self.frame, width=30, bg='white', textvariable=self.profile_text)
         self.profile_text_label.grid(row=0, column=1)
-        self.open_button = ttk.Button(self.frame, text='Open a File', command=lambda:self.select_file(shared_data))
+        self.open_button = ttk.Button(self.frame, text='Open a File', command=self.select_file)
         self.open_button.grid(row=0, column=2)
 
         # load last modified file
@@ -128,31 +130,31 @@ class ProfileFrame:
         latest_profile = max(profile_list, key=os.path.getctime)
         try:
             with open(latest_profile, 'r') as file:
-                shared_data.profile = json.load(file)
+                SharedData.profile = json.load(file)
             self.profile_text.set(latest_profile.split('\\')[-1])
         except Exception:
             messagebox.showerror('Error', 'Error opening most recent profile file.')
             traceback.print_exc()
 
-    def select_file(self, shared_data):
+    def select_file(self):
         filetypes = [('JSON files', '*.json')]
         profile_filename = filedialog.askopenfilename(title='Open profile', initialdir=dev_profiles_dir, filetypes=filetypes)
         try:
             with open(profile_filename, 'r') as file:
-                shared_data.profile = json.load(file)
+                SharedData.profile = json.load(file)
                 self.profile_text.set(profile_filename.split('/')[-1])
         except Exception:
             messagebox.showerror('Error', 'Error opening profile file.')
             traceback.print_exc()
 
         for instance in DBConnectionFrame.instances:
-            instance.write_default_connection_values(shared_data)
+            instance.write_default_connection_values()
 
 
 class DBConnectionFrame:
     instances = []
 
-    def __init__(self, root, shared_data, src_dst):
+    def __init__(self, root, src_dst):
         self.__class__.instances.append(self)
         self.src_dst = src_dst
         if self.src_dst == 'Source':
@@ -167,7 +169,7 @@ class DBConnectionFrame:
         self.create_lables_connection_window()
         self.create_elements_connection_window()
         self.add_to_grid_connection_window(self.offset)
-        self.write_default_connection_values(shared_data)
+        self.write_default_connection_values()
 
     def create_lables_connection_window(self):
         self.header_label = tk.Label(self.frame, text=f'{self.src_dst} database')
@@ -199,17 +201,17 @@ class DBConnectionFrame:
         self.password_input.grid(row=5, column=1 + offset)
         self.test_connection_button.grid(row=6, column=0+offset, columnspan=2)
 
-    def write_default_connection_values(self, shared_data):
+    def write_default_connection_values(self):
         try:
-            self.db_dropdown.set(shared_data.profile[self.src_dst]['db_type'])
+            self.db_dropdown.set(SharedData.profile[self.src_dst]['db_type'])
             self.host_input.delete(0, 'end')
-            self.host_input.insert(0, shared_data.profile[self.src_dst]['host'])
+            self.host_input.insert(0, SharedData.profile[self.src_dst]['host'])
             self.database_name_input.delete(0, 'end')
-            self.database_name_input.insert(0, shared_data.profile[self.src_dst]['db_name'])
+            self.database_name_input.insert(0, SharedData.profile[self.src_dst]['db_name'])
             self.user_input.delete(0, 'end')
-            self.user_input.insert(0, shared_data.profile[self.src_dst]['username'])
+            self.user_input.insert(0, SharedData.profile[self.src_dst]['username'])
             self.password_input.delete(0, 'end')
-            self.password_input.insert(0, shared_data.profile[self.src_dst]['password'])
+            self.password_input.insert(0, SharedData.profile[self.src_dst]['password'])
 
         except Exception:
             traceback.print_exc()
@@ -234,16 +236,16 @@ class DBConnectionFrame:
 
 
 class CompareFrame:
-    def __init__(self, root, shared_data, source_db_connector, destination_db_connector, profile_frame, source_frame, destination_frame, result_frame):
-        self.frame = tk.Frame(root, width=600, height=100)
+    def __init__(self, root, source_db_connector, destination_db_connector, profile_frame, source_frame, destination_frame, result_frame):
+        self.frame = tk.Frame(root, width=window_width, height=100)
         self.frame.pack(side='bottom')
         self.compare_db_button = ttk.Button(self.frame, text='Compare DBs',
-                                            command=lambda:self.compare_db(source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame, shared_data))
+                                            command=lambda:self.compare_db(source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame))
         self.compare_db_button.grid(row=0, column=0)
         self.init_button = ttk.Button(self.frame, text='Initialize DBs', command=lambda: self.init_dbs(source_db_connector, source_frame, destination_frame))
         self.init_button.grid(row=1, column=0)
-        self.apply_structure_changes_button = ttk.Button(self.frame, text='Apply DB changes', command=lambda: self.apply_structure_changes(shared_data, profile_frame, source_db_connector, source_frame, destination_frame))
-        self.apply_structure_changes_button.grid(row=2, column=0)
+        self.source_structure_changes_button = ttk.Button(self.frame, text='Get source DB changes', command=lambda: self.source_structure_changes(profile_frame, source_db_connector, source_frame, destination_frame, result_frame))
+        self.source_structure_changes_button.grid(row=2, column=0)
 
     def init_dbs(self, source_db_connector, source_frame, destination_frame):
         mb_answer = messagebox.askquestion(
@@ -291,67 +293,13 @@ class CompareFrame:
                 messagebox.showerror('Error', 'Source database is empty.')
                 return -1
 
-            # init dicts with first row
-            # schema_list = []
-            # column_dict = {
-            #     'column_name': query_result[0][4],
-            #     'data_type_id': query_result[0][5],
-            #     'data_type_name': query_result[0][6]
-            # }
-            # table_dict = {
-            #     'table_id': query_result[0][2],
-            #     'table_name': query_result[0][3],
-            #     'columns': [column_dict]
-            # }
-            # schema_dict = {
-            #     'schema_id': query_result[0][0],
-            #     'schema_name': query_result[0][1],
-            #     'tables': []
-            # }
-            #
-            # for row in query_result[1:]:
-            #     column_dict = {
-            #         'column_name': row[4],
-            #         'data_type_id': row[5],
-            #         'data_type_name': row[6]
-            #     }
-            #
-            #     # new table
-            #     if row[2] not in table_dict.values():
-            #         schema_dict['tables'].append(table_dict)
-            #         table_dict = {
-            #             'table_id': row[2],
-            #             'table_name': row[3],
-            #             'columns': [column_dict]
-            #         }
-            #     # existing table
-            #     else:
-            #         table_dict['columns'].append(column_dict)
-            #
-            #     # new schema
-            #     if row[0] not in schema_dict.values():
-            #         schema_list.append(schema_dict)
-            #         schema_dict = {
-            #             'schema_id': row[0],
-            #             'schema_name': row[1],
-            #             'tables': []
-            #         }
-            #
-            # # write dicts after last row
-            # schema_dict['tables'].append(table_dict)
-            # schema_list.append(schema_dict)
-            #
-            # file_output['source_struct'] = schema_list
-
             file_output['source_struct'] = query_result.to_dict()
-
             json_output = json.dumps(file_output, indent=4)
             filetypes = [('JSON files', '*.json')]
-            filename = filedialog.asksaveasfile(title='Save profile', initialdir=dev_profiles_dir, filetypes=filetypes, defaultextension='.json')
-            filename.write(json_output)
+            with filedialog.asksaveasfile(title='Save profile', initialdir=dev_profiles_dir, filetypes=filetypes, defaultextension='.json') as file:
+                file.write(json_output)
 
-
-    def apply_structure_changes(self, shared_data, profile_frame, source_db_connector, source_frame, destination_frame):
+    def source_structure_changes(self, profile_frame, source_db_connector, source_frame, destination_frame, result_frame):
         # get current source table structure
         source_db_connector.connect_to_db(source_frame.db_dropdown.get(),
                                           source_frame.user_input.get(),
@@ -381,7 +329,7 @@ class CompareFrame:
         old_source_struct = pd.DataFrame.from_dict(json_input['source_struct'])
 
         # TODO: speed optimization
-        shared_data.structure_changes = []    # old_schema_name, new_schema_name, old_table_name, new_table_name, old_colun_name, new_column_name, old_data_type_name, new_data_type_name, cdc (I, U, D and S, T, C, D)
+        SharedData.structure_changes = []    # old_schema_name, new_schema_name, old_table_name, new_table_name, old_colun_name, new_column_name, old_data_type_name, new_data_type_name, cdc (I, U, D and S, T, C, D)
 
         # check if new schemas have been added
         old_schema_ids = old_source_struct.schema_id.unique()
@@ -391,7 +339,7 @@ class CompareFrame:
         # add new schemas
         for new_schema_id in new_schema_ids_only:
             new_schema_filtered = new_source_struct.loc[new_source_struct['schema_id'] == new_schema_id]
-            shared_data.structure_changes.append([
+            SharedData.structure_changes.append([
                 None, new_schema_filtered.iloc[0]['schema_name'],
                 None, None, None, None, None, None, 'IS'
             ])
@@ -400,7 +348,7 @@ class CompareFrame:
             new_table_ids = new_schema_filtered.table_id.unique()
             for new_table_id in new_table_ids:
                 new_table_filtered = new_schema_filtered[new_schema_filtered['table_id'] == new_table_id]
-                shared_data.structure_changes.append([
+                SharedData.structure_changes.append([
                     None, new_schema_filtered.iloc[0]['schema_name'],
                     None, new_table_filtered.iloc[0]['table_name'],
                     None, None, None, None, 'IT'
@@ -408,7 +356,7 @@ class CompareFrame:
 
                 # add new columns
                 for column in new_table_filtered.itertuples(index=False):
-                    shared_data.structure_changes.append([
+                    SharedData.structure_changes.append([
                         None, new_schema_filtered.iloc[0]['schema_name'],
                         None, new_table_filtered.iloc[0]['table_name'],
                         None, column.column_name,
@@ -421,7 +369,7 @@ class CompareFrame:
 
             # check if old schemas have been deleted
             if old_schema_id not in new_source_struct['schema_id'].to_numpy():
-                shared_data.structure_changes.append([
+                SharedData.structure_changes.append([
                     old_schema_filtered.iloc[0]['schema_name'], None,
                     None, None, None, None, None, None, 'DS'
                 ])
@@ -432,7 +380,7 @@ class CompareFrame:
 
                 # check if schemas have been renamed
                 if old_schema_filtered.iloc[0]['schema_name'] != new_schema_filtered.iloc[0]['schema_name']:
-                    shared_data.structure_changes.append([
+                    SharedData.structure_changes.append([
                         old_schema_filtered.iloc[0]['schema_name'], new_schema_filtered.iloc[0]['schema_name'],
                         None, None, None, None, None, None, 'US'
                     ])
@@ -445,7 +393,7 @@ class CompareFrame:
                 # add new tables
                 for new_table_id in new_table_ids_only:
                     new_table_filtered = new_schema_filtered[new_schema_filtered['table_id'] == new_table_id]
-                    shared_data.structure_changes.append([
+                    SharedData.structure_changes.append([
                         None, new_schema_filtered.iloc[0]['schema_name'],
                         None, new_table_filtered.iloc[0]['table_name'],
                         None, None, None, None, 'IT'
@@ -453,7 +401,7 @@ class CompareFrame:
 
                     # add new columns
                     for new_column in new_table_filtered.itertuples(index=False):
-                        shared_data.structure_changes.append([
+                        SharedData.structure_changes.append([
                             None, new_schema_filtered.iloc[0]['schema_name'],
                             None, new_table_filtered.iloc[0]['table_name'],
                             None, new_column.column_name,
@@ -467,7 +415,7 @@ class CompareFrame:
 
                     # check if old tables have been deleted
                     if old_table_id not in new_schema_filtered['table_id'].to_numpy():
-                        shared_data.structure_changes.append([
+                        SharedData.structure_changes.append([
                             old_schema_filtered.iloc[0]['schema_name'], new_schema_filtered.iloc[0]['schema_name'],
                             old_table_filtered.iloc[0]['table_name'], None,
                             None, None, None, None, 'DT'
@@ -479,16 +427,16 @@ class CompareFrame:
 
                         # check if table has been renamed
                         if old_table_filtered.iloc[0]['table_name'] != new_table_filtered.iloc[0]['table_name']:
-                            shared_data.structure_changes.append([
+                            SharedData.structure_changes.append([
                                 old_schema_filtered.iloc[0]['schema_name'], new_schema_filtered.iloc[0]['schema_name'],
                                 old_table_filtered.iloc[0]['table_name'], new_table_filtered.iloc[0]['table_name'],
                                 None, None, None, None, 'UT'
                             ])
-    
+
                         for new_column in new_table_filtered.itertuples(index=False):
                             # insert new (or renamed) column - not sure because of lack of column id
                             if new_column.column_name not in old_table_filtered['column_name'].to_numpy():
-                                shared_data.structure_changes.append([
+                                SharedData.structure_changes.append([
                                     old_schema_filtered.iloc[0]['schema_name'], new_schema_filtered.iloc[0]['schema_name'],
                                     old_table_filtered.iloc[0]['table_name'], new_table_filtered.iloc[0]['table_name'],
                                     None, new_column.column_name,
@@ -500,7 +448,7 @@ class CompareFrame:
                             else:
                                 old_column = old_table_filtered[old_table_filtered['column_name'] == new_column.column_name]
                                 if new_column.data_type_name != old_column.iloc[0]['data_type_name']:
-                                    shared_data.structure_changes.append([
+                                    SharedData.structure_changes.append([
                                         old_schema_filtered.iloc[0]['schema_name'], new_schema_filtered.iloc[0]['schema_name'],
                                         old_table_filtered.iloc[0]['table_name'], new_table_filtered.iloc[0]['table_name'],
                                         old_column.iloc[0]['column_name'], new_column.column_name,
@@ -508,188 +456,172 @@ class CompareFrame:
                                         'UD'
                                     ])
 
-        self.generate_ddl_script(shared_data.structure_changes, destination_frame.db_dropdown.get())
+        profile_frame.frame.pack_forget()
+        source_frame.frame.pack_forget()
+        destination_frame.frame.pack_forget()
+        self.frame.pack_forget()
+        result_frame.frame.pack(side='top')
 
-    def generate_ddl_script(self, structure_changes, database_name):
-        if structure_changes:
-            ddl_script = ''
-            if database_name == postgres:
-                for row in structure_changes:
+    # def print_table_structures(self, database_name, table_structures, view_structures):
+    #     print(f'\n### {database_name} ###')
+    #     print('--- table structures ---')
+    #     for table in table_structures:
+    #         print(f'table name: {table[0]}')
+    #         for column in table[1]:
+    #             print(f'- {column[0]} ({column[1]})')
+    #
+    #     print('\n--- view structures ---')
+    #     for view in view_structures:
+    #         print(f'view name: {view[0]}')
+    #         for column in view[1]:
+    #             print(f'- {column[0]} ({column[1]})')
+
+    # TODO
+    # def compare_db(self, source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame, shared_data):
+    #     source_db_connector.connect_to_db(source_frame.db_dropdown.get(),
+    #                                  source_frame.user_input.get(),
+    #                                  source_frame.password_input.get(),
+    #                                  source_frame.host_input.get(),
+    #                                  source_frame.database_name_input.get())
+    #     destination_db_connector.connect_to_db(destination_frame.db_dropdown.get(),
+    #                                       destination_frame.user_input.get(),
+    #                                       destination_frame.password_input.get(),
+    #                                       destination_frame.host_input.get(),
+    #                                       destination_frame.database_name_input.get())
+    #
+    #     source_db_connector.get_table_structures()
+    #     destination_db_connector.get_table_structures()
+    #
+    #     self.source_table_structures = source_db_connector.table_structures
+    #     self.source_view_structures = source_db_connector.view_structures
+    #     self.destination_table_structures = destination_db_connector.table_structures
+    #     self.destination_view_structures = destination_db_connector.view_structures
+    #
+    #     # self.print_table_structures(source_db_connector.database, self.source_table_structures, self.source_view_structures)
+    #     # self.print_table_structures(destination_db_connector.database, self.destination_table_structures, self.destination_view_structures)
+    #
+    #     # clear screen and set next screen
+    #     source_frame.frame.destroy()
+    #     destination_frame.frame.destroy()
+    #     self.frame.destroy()
+    #     result_frame.frame.pack(side='top')
+    #
+    #     # table sync logic
+    #     print('#######################################################################################################')
+    #     print('### source ###')
+    #     print('# tables')
+    #     for elem in self.source_table_structures: print(elem)
+    #     print('# views')
+    #     for elem in self.source_view_structures: print(elem)
+    #
+    #     print('\n### destination ###')
+    #     print('-#tables')
+    #     for elem in self.destination_table_structures: print(elem)
+    #     print('# views')
+    #     for elem in self.destination_view_structures: print(elem)
+    #
+    #     source_table_list = [elem[0] for elem in self.source_table_structures]
+    #     source_view_list = [elem[0] for elem in self.source_table_structures]
+    #     destination_table_list = [elem[0] for elem in self.destination_table_structures]
+    #     destination_view_list = [elem[0] for elem in self.destination_table_structures]
+    #     equal_table_list = set(source_table_list) & set(destination_table_list)
+    #
+    #     # TODO: check for equal columns (table has been renamed)
+    #     print('\n### New tables ###')
+    #     result_frame.result_text.insert(tk.END, '### New tables ###\n')
+    #     for table_struct in self.source_table_structures:
+    #         if table_struct[0] not in destination_table_list:
+    #             shared_data.new_tables.append(table_struct)
+    #             print(table_struct)
+    #             result_frame.result_text.insert(tk.END, f'{table_struct[0]}\n')
+    #             for column in table_struct[1]:
+    #                 result_frame.result_text.insert(tk.END, f'- {column[0]} ({column[1]})\n')
+    #             result_frame.result_text.insert(tk.END, '\n')
+    #
+    #     # TODO: check for equal columns (table has been renamed)
+    #     print('\n### Deleted tables ###')
+    #     result_frame.result_text.insert(tk.END, '\n### Deleted tables ###\n')
+    #     for table_struct in self.destination_table_structures:
+    #         if table_struct[0] not in source_table_list:
+    #             shared_data.deleted_tables.append(table_struct)
+    #             print(table_struct)
+    #             result_frame.result_text.insert(tk.END, f'{table_struct[0]}\n')
+    #             for column in table_struct[1]:
+    #                 result_frame.result_text.insert(tk.END, f'- {column[0]} ({column[1]})\n')
+    #             result_frame.result_text.insert(tk.END, '\n')
+    #
+    #     print('\n### Altered tables ###')
+    #     result_frame.result_text.insert(tk.END, '\n### Altered tables ###\n')
+    #     equal_source_tables = []
+    #     equal_destination_tables = []
+    #
+    #     # check for tables with same name
+    #     for source_table_struct in self.source_table_structures:
+    #         for destination_table_struct in self.destination_table_structures:
+    #             if source_table_struct[0] == destination_table_struct[0]:
+    #                 equal_source_tables.append(source_table_struct)
+    #                 equal_destination_tables.append(destination_table_struct)
+    #
+    #     # check for exclusive column names in source-destination table pair
+    #     for i in range(len(equal_source_tables)):
+    #         source_column_names = [column[0] for column in equal_source_tables[i][1]]
+    #         destination_column_names = [column[0] for column in equal_destination_tables[i][1]]
+    #         unique_source_columns = set(source_column_names) - set(destination_column_names)
+    #         unique_destination_columns = set(destination_column_names) - set(source_column_names)
+
+
+class ResultFrame:
+    def __init__(self, root, destination_db_connector):
+        self.frame = tk.Frame(root, width=580, height=250, padx=10, pady=10)
+        self.result_text = tk.Text(self.frame, width=window_width, height=14)   # width in letters and height in text lines
+        self.result_text.pack()
+        self.generate_script_button = ttk.Button(self.frame, text='Generate script', command=lambda:self.ddl_script_to_file())
+        self.generate_script_button.pack()
+        self.deploy_button = ttk.Button(self.frame, text='Deploy changes to database', command=lambda:self.deploy_to_database(destination_db_connector))
+        self.deploy_button.pack()
+        self.ddl_script = ''
+        self.frame.bind('<Map>', lambda event: self.generate_ddl_script())
+
+    def generate_ddl_script(self):
+        if SharedData.structure_changes:
+            self.ddl_script = ''
+            if SharedData.database_type == postgres:
+                for row in SharedData.structure_changes:
                     print(row)
                     if row[8] == 'IS':
-                        ddl_script += f'CREATE SCHEMA {row[1]};\n\n'
+                        self.ddl_script += f'CREATE SCHEMA {row[1]};\n\n'
                     elif row[8] == 'IT':
-                        ddl_script += f'CREATE TABLE {row[1]}.{row[3]};\n\n'
+                        self.ddl_script += f'CREATE TABLE {row[1]}.{row[3]};\n\n'
                     elif row[8] == 'IC' or row[-1] == 'UC':
-                        ddl_script += f'ALTER TABLE {row[1]}.{row[3]}\n' \
+                        self.ddl_script += f'ALTER TABLE {row[1]}.{row[3]}\n' \
                                       f'ADD {row[5]} {row[7]};\n\n'
                     elif row[8] == 'US':
-                        ddl_script += f'ALTER SCHEMA {row[0]}\n' \
+                        self.ddl_script += f'ALTER SCHEMA {row[0]}\n' \
                                       f'RENAME TO {row[1]};\n\n'
                     elif row[8] == 'UT':
-                        ddl_script += f'ALTER TABLE {row[2]}\n' \
+                        self.ddl_script += f'ALTER TABLE {row[2]}\n' \
                                       f'RENAME TO {row[3]};\n\n'
                     elif row[8] == 'UD':
-                        ddl_script += f'ALTER TABLE {row[3]}\n' \
+                        self.ddl_script += f'ALTER TABLE {row[3]}\n' \
                                       f'MODIFY COLUMN {row[5]} {row[7]};\n\n'
                     elif row[8] == 'DS':
-                        ddl_script += f'DROP SCHEMA IF EXISTS {row[0]};\n\n'
+                        self.ddl_script += f'DROP SCHEMA IF EXISTS {row[0]};\n\n'
                     elif row[8] == 'DT':
-                        ddl_script += f'DROP TABLE IF EXISTS {row[2]};\n\n'
+                        self.ddl_script += f'DROP TABLE IF EXISTS {row[2]};\n\n'
                     else:
-                        ddl_script += '\n-- unhandled action\n'
-
-            print(ddl_script)
+                        self.ddl_script += f'\n-- unhandled action for {row}\n'
+            print(self.ddl_script)
 
         else:
             print('no changes')
 
-
-
-
-    def print_table_structures(self, database_name, table_structures, view_structures):
-        print(f'\n### {database_name} ###')
-        print('--- table structures ---')
-        for table in table_structures:
-            print(f'table name: {table[0]}')
-            for column in table[1]:
-                print(f'- {column[0]} ({column[1]})')
-
-        print('\n--- view structures ---')
-        for view in view_structures:
-            print(f'view name: {view[0]}')
-            for column in view[1]:
-                print(f'- {column[0]} ({column[1]})')
-
-    # TODO
-    def compare_db(self, source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame, shared_data):
-        source_db_connector.connect_to_db(source_frame.db_dropdown.get(),
-                                     source_frame.user_input.get(),
-                                     source_frame.password_input.get(),
-                                     source_frame.host_input.get(),
-                                     source_frame.database_name_input.get())
-        destination_db_connector.connect_to_db(destination_frame.db_dropdown.get(),
-                                          destination_frame.user_input.get(),
-                                          destination_frame.password_input.get(),
-                                          destination_frame.host_input.get(),
-                                          destination_frame.database_name_input.get())
-
-        source_db_connector.get_table_structures()
-        destination_db_connector.get_table_structures()
-
-        self.source_table_structures = source_db_connector.table_structures
-        self.source_view_structures = source_db_connector.view_structures
-        self.destination_table_structures = destination_db_connector.table_structures
-        self.destination_view_structures = destination_db_connector.view_structures
-
-        # self.print_table_structures(source_db_connector.database, self.source_table_structures, self.source_view_structures)
-        # self.print_table_structures(destination_db_connector.database, self.destination_table_structures, self.destination_view_structures)
-
-        # clear screen and set next screen
-        source_frame.frame.destroy()
-        destination_frame.frame.destroy()
-        self.frame.destroy()
-        result_frame.frame.pack(side='top')
-
-        # table sync logic
-        print('#######################################################################################################')
-        print('### source ###')
-        print('# tables')
-        for elem in self.source_table_structures: print(elem)
-        print('# views')
-        for elem in self.source_view_structures: print(elem)
-
-        print('\n### destination ###')
-        print('-#tables')
-        for elem in self.destination_table_structures: print(elem)
-        print('# views')
-        for elem in self.destination_view_structures: print(elem)
-
-        source_table_list = [elem[0] for elem in self.source_table_structures]
-        source_view_list = [elem[0] for elem in self.source_table_structures]
-        destination_table_list = [elem[0] for elem in self.destination_table_structures]
-        destination_view_list = [elem[0] for elem in self.destination_table_structures]
-        equal_table_list = set(source_table_list) & set(destination_table_list)
-
-        # TODO: check for equal columns (table has been renamed)
-        print('\n### New tables ###')
-        result_frame.result_text.insert(tk.END, '### New tables ###\n')
-        for table_struct in self.source_table_structures:
-            if table_struct[0] not in destination_table_list:
-                shared_data.new_tables.append(table_struct)
-                print(table_struct)
-                result_frame.result_text.insert(tk.END, f'{table_struct[0]}\n')
-                for column in table_struct[1]:
-                    result_frame.result_text.insert(tk.END, f'- {column[0]} ({column[1]})\n')
-                result_frame.result_text.insert(tk.END, '\n')
-
-        # TODO: check for equal columns (table has been renamed)
-        print('\n### Deleted tables ###')
-        result_frame.result_text.insert(tk.END, '\n### Deleted tables ###\n')
-        for table_struct in self.destination_table_structures:
-            if table_struct[0] not in source_table_list:
-                shared_data.deleted_tables.append(table_struct)
-                print(table_struct)
-                result_frame.result_text.insert(tk.END, f'{table_struct[0]}\n')
-                for column in table_struct[1]:
-                    result_frame.result_text.insert(tk.END, f'- {column[0]} ({column[1]})\n')
-                result_frame.result_text.insert(tk.END, '\n')
-
-        print('\n### Altered tables ###')
-        result_frame.result_text.insert(tk.END, '\n### Altered tables ###\n')
-        equal_source_tables = []
-        equal_destination_tables = []
-
-        # check for tables with same name
-        for source_table_struct in self.source_table_structures:
-            for destination_table_struct in self.destination_table_structures:
-                if source_table_struct[0] == destination_table_struct[0]:
-                    equal_source_tables.append(source_table_struct)
-                    equal_destination_tables.append(destination_table_struct)
-
-        # check for exclusive column names in source-destination table pair
-        for i in range(len(equal_source_tables)):
-            source_column_names = [column[0] for column in equal_source_tables[i][1]]
-            destination_column_names = [column[0] for column in equal_destination_tables[i][1]]
-            unique_source_columns = set(source_column_names) - set(destination_column_names)
-            unique_destination_columns = set(destination_column_names) - set(source_column_names)
-
-
-
-class ResultFrame:
-    def __init__(self, root, shared_data, destination_db_connector):
-        self.frame = tk.Frame(root, width=580, height=250, padx=10, pady=10)
-        self.deploy_button = ttk.Button(self.frame, text='Deploy shared_data.structure_changes to database', command=lambda:self.deploy_to_database(shared_data, destination_db_connector))
-        self.deploy_button.pack(side='bottom')
-        self.generate_script_button = ttk.Button(self.frame, text='Generate script', command=lambda:self.ddl_script_to_file(shared_data))
-        self.generate_script_button.pack(side='bottom')
-        self.result_text = tk.Text(self.frame, height=200, width=600)
-        self.result_text.pack(side='top')
-        self.ddl_script = ''
-
-    def generate_ddl_script(self, shared_data):
-        # create table statements
-        self.ddl_script = ''
-        for table in shared_data.new_tables:
-            self.ddl_script += f'CREATE TABLE IF NOT EXISTS {table[0]} (\n'
-            for column in table[1]:
-                self.ddl_script += f'    {column[0]} {column[1]},\n'
-            self.ddl_script = self.ddl_script[:-2]
-            self.ddl_script += '\n);\n\n'
-
-        # delete table statements
-        for table in shared_data.deleted_tables:
-            self.ddl_script += f'DROP TABLE IF EXISTS {table[0]};\n\n'
-
-        self.ddl_script = self.ddl_script.strip('\n')
-
-    def ddl_script_to_file(self, shared_data):
+    def ddl_script_to_file(self):
         try:
-            self.generate_ddl_script(shared_data)
             if not self.ddl_script.strip():
                 messagebox.showinfo('DDL Script Generation', 'Nothing to create ;)')
             else:
-                with open('../util/DDL_Script.sql', 'w') as file:
+                filetypes = [('SQL files', '*.sql')]
+                with filedialog.asksaveasfile(title='Save profile', initialdir=dev_profiles_dir, filetypes=filetypes, defaultextension='.json') as file:
                     file.write(self.ddl_script)
                 messagebox.showinfo('DDL Script Generation', 'DDL script generated sucessfully :)')
 
@@ -697,13 +629,14 @@ class ResultFrame:
             messagebox.showerror('DDL Script Generation', 'DDL script generation failed :(')
             traceback.print_exc()
 
-    def deploy_to_database(self, shared_data, db_connector_destination):
+    def deploy_to_database(self, db_connector_destination):
+        # self.generate_ddl_script(shared_data.structure_changes, destination_frame.db_dropdown.get())
         try:
-            self.generate_ddl_script(shared_data)
+            self.generate_ddl_script()
             if not self.ddl_script.strip():
                 messagebox.showinfo('DDL Script Deployment', 'Nothing to deploy ;)')
             else:
-                mb_answer = messagebox.askquestion('Deploy shared_data.structure_changes', f'Deploy shared_data.structure_changes to {db_connector_destination.host}/{db_connector_destination.database} ?')
+                mb_answer = messagebox.askquestion('Deploy structure changes', f'Deploy structure changes to {db_connector_destination.host}/{db_connector_destination.database} ?')
                 if mb_answer == 'yes':
                     for statement in self.ddl_script.split(';'):    # need for multi statements
                         if statement: db_connector_destination.execute_statement(f'{statement};')
