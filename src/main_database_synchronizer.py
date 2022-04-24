@@ -37,10 +37,9 @@ class App():
         source_db_connector = DBConnector()
         destination_db_connector = DBConnector()
         profile_frame = ProfileFrame(root)
-        source_frame = DBConnectionFrame(root, 'Source')
-        destination_frame = DBConnectionFrame(root, 'Destination')
-        result_frame = ResultFrame(root, destination_db_connector, destination_frame)
-        compare_frame = CompareFrame(root, source_db_connector, destination_db_connector, profile_frame, source_frame, destination_frame, result_frame)
+        source_frame = DBConnectionFrame(root, 'Source', profile_frame)
+        destination_frame = DBConnectionFrame(root, 'Destination', profile_frame)
+        compare_frame = CompareFrame(root, source_db_connector, destination_db_connector, profile_frame, source_frame, destination_frame)
 
 
 class SharedData:
@@ -122,10 +121,14 @@ class ProfileFrame:
         self.profile_text_label.grid(row=0, column=1)
         self.open_button = ttk.Button(self.frame, text='Open a File', command=self.select_file)
         self.open_button.grid(row=0, column=2)
+        self.db_label = tk.Label(self.frame, text='Database type:')
+        self.db_label.grid(row=1, column=0)
+        self.db_dropdown = ttk.Combobox(self.frame, values=[maria_db, postgres], state='readonly')  # TODO: add other databases
+        self.db_dropdown.grid(row=1, column=1)
 
         # load last modified file
         profile_list = glob.glob(f'{dev_profiles_dir}\\*.json')
-        latest_profile = max(profile_list, key=os.path.getctime)
+        latest_profile = max(profile_list, key=os.path.getmtime)
         try:
             with open(latest_profile, 'r') as file:
                 SharedData.profile = json.load(file)
@@ -146,13 +149,13 @@ class ProfileFrame:
             traceback.print_exc()
 
         for instance in DBConnectionFrame.instances:
-            instance.write_default_connection_values()
+            instance.write_default_connection_values(self.db_dropdown)
 
 
 class DBConnectionFrame:
     instances = []
 
-    def __init__(self, root, src_dst):
+    def __init__(self, root, src_dst, profile_frame):
         self.__class__.instances.append(self)
         self.src_dst = src_dst
         if self.src_dst == 'Source':
@@ -167,7 +170,7 @@ class DBConnectionFrame:
         self.create_lables_connection_window()
         self.create_elements_connection_window()
         self.add_to_grid_connection_window(self.offset)
-        self.write_default_connection_values()
+        self.write_default_connection_values(profile_frame.db_dropdown)
 
     def create_lables_connection_window(self):
         self.header_label = tk.Label(self.frame, text=f'{self.src_dst} database')
@@ -187,8 +190,8 @@ class DBConnectionFrame:
 
     def add_to_grid_connection_window(self, offset):
         self.header_label.grid(row=0, column=0+offset, columnspan=2)
-        self.db_label.grid(row=1, column=0 + offset)
-        self.db_dropdown.grid(row=1, column=1 + offset)
+        # self.db_label.grid(row=1, column=0 + offset)
+        # self.db_dropdown.grid(row=1, column=1 + offset)
         self.host_label.grid(row=2, column=0 + offset)
         self.host_input.grid(row=2, column=1 + offset)
         self.database_name_label.grid(row=3, column=0 + offset)
@@ -199,9 +202,10 @@ class DBConnectionFrame:
         self.password_input.grid(row=5, column=1 + offset)
         self.test_connection_button.grid(row=6, column=0+offset, columnspan=2)
 
-    def write_default_connection_values(self):
+    def write_default_connection_values(self, db_dropdown):
         try:
-            self.db_dropdown.set(SharedData.profile[self.src_dst]['db_type'])
+            self.db_dropdown.set(SharedData.profile['db_type'])
+            db_dropdown.set(SharedData.profile['db_type'])
             self.host_input.delete(0, 'end')
             self.host_input.insert(0, SharedData.profile[self.src_dst]['host'])
             self.database_name_input.delete(0, 'end')
@@ -234,18 +238,17 @@ class DBConnectionFrame:
 
 
 class CompareFrame:
-    def __init__(self, root, source_db_connector, destination_db_connector, profile_frame, source_frame, destination_frame, result_frame):
+    def __init__(self, root, source_db_connector, destination_db_connector, profile_frame, source_frame, destination_frame):
         self.frame = tk.Frame(root, width=window_width, height=100)
         self.frame.pack(side='bottom')
-        self.compare_db_button = ttk.Button(self.frame, text='Compare DBs',
-                                            command=lambda:self.compare_db(source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame))
+        self.compare_db_button = ttk.Button(self.frame, text='Compare DBs', command=lambda:self.compare_db(source_db_connector, destination_db_connector, source_frame, destination_frame))
         # self.compare_db_button.grid(row=0, column=0)
-        self.init_button = ttk.Button(self.frame, text='Initialize DBs', command=lambda: self.init_dbs(source_db_connector, source_frame, destination_frame))
+        self.init_button = ttk.Button(self.frame, text='Initialize DBs', command=lambda: self.init_dbs(source_db_connector, profile_frame, source_frame, destination_frame))
         self.init_button.grid(row=1, column=0)
-        self.source_structure_changes_button = ttk.Button(self.frame, text='Get source DB changes', command=lambda: self.source_structure_changes(source_db_connector, profile_frame, source_frame, destination_frame, result_frame))
+        self.source_structure_changes_button = ttk.Button(self.frame, text='Get source DB changes', command=lambda: self.source_structure_changes(source_db_connector, destination_db_connector, profile_frame, source_frame, destination_frame))
         self.source_structure_changes_button.grid(row=2, column=0)
 
-    def init_dbs(self, source_db_connector, source_frame, destination_frame):
+    def init_dbs(self, source_db_connector, profile_frame, source_frame, destination_frame):
         mb_answer = messagebox.askquestion(
             'Initialize DBs',
             f'Would you like to create a new profile and initialize it with the given database credentials?\n'
@@ -253,15 +256,16 @@ class CompareFrame:
         )
         if mb_answer == 'yes':
             file_output = {
+                'db_type': profile_frame.db_dropdown.get(),
                 source_frame.src_dst : {
-                    'db_type': source_frame.db_dropdown.get(),
+                    # 'db_type': source_frame.db_dropdown.get(),
                     'host': source_frame.host_input.get(),
                     'db_name': source_frame.database_name_input.get(),
                     'username': source_frame.user_input.get(),
                     'password': source_frame.password_input.get()
                 },
                 destination_frame.src_dst: {
-                    'db_type': destination_frame.db_dropdown.get(),
+                    # 'db_type': destination_frame.db_dropdown.get(),
                     'host': destination_frame.host_input.get(),
                     'db_name': destination_frame.database_name_input.get(),
                     'username': destination_frame.user_input.get(),
@@ -297,7 +301,7 @@ class CompareFrame:
             with filedialog.asksaveasfile(title='Save profile', initialdir=dev_profiles_dir, filetypes=filetypes, defaultextension='.json') as file:
                 file.write(json_output)
 
-    def source_structure_changes(self, source_db_connector, profile_frame, source_frame, destination_frame, result_frame):
+    def source_structure_changes(self, source_db_connector, destination_db_connector, profile_frame, source_frame, destination_frame):
         # get current source table structure
         source_db_connector.connect_to_db(source_frame.db_dropdown.get(),
                                           source_frame.user_input.get(),
@@ -454,12 +458,10 @@ class CompareFrame:
                                         'UD'
                                     ])
 
-        profile_frame.frame.pack_forget()
-        source_frame.frame.pack_forget()
-        destination_frame.frame.pack_forget()
-        self.frame.pack_forget()
-        result_frame.destination_db_connector = destination_frame
-        result_frame.frame.pack(side='top')
+        result_window = tk.Toplevel()
+        result_window.grab_set()
+        result_frame = ResultFrame(result_window, destination_db_connector, destination_frame)
+        result_frame.frame.pack()
 
     # def print_table_structures(self, database_name, table_structures, view_structures):
     #     print(f'\n### {database_name} ###')
@@ -571,8 +573,8 @@ class CompareFrame:
 
 class ResultFrame:
     def __init__(self, root, destination_db_connector, destination_frame):
-        self.frame = tk.Frame(root, width=580, height=250, padx=10, pady=10)
-        self.result_text = tk.Text(self.frame, width=window_width, height=14)   # width in letters and height in text lines
+        self.frame = tk.Frame(root, padx=10, pady=10)
+        self.result_text = tk.Text(self.frame, width=100, height=40)   # width in letters and height in text lines
         self.result_text.pack()
         self.generate_script_button = ttk.Button(self.frame, text='Generate script', command=lambda:self.ddl_script_to_file())
         self.generate_script_button.pack()
