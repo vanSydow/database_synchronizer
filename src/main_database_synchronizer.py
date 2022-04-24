@@ -6,9 +6,7 @@ import pandas as pd
 from time import sleep
 from sqlalchemy import create_engine
 import tkinter as tk
-from tkinter import ttk
-from tkinter import messagebox
-from tkinter import filedialog
+from tkinter import ttk, messagebox, filedialog
 
 
 # pip install pandas
@@ -241,7 +239,7 @@ class CompareFrame:
         self.frame.pack(side='bottom')
         self.compare_db_button = ttk.Button(self.frame, text='Compare DBs',
                                             command=lambda:self.compare_db(source_db_connector, destination_db_connector, source_frame, destination_frame, result_frame))
-        self.compare_db_button.grid(row=0, column=0)
+        # self.compare_db_button.grid(row=0, column=0)
         self.init_button = ttk.Button(self.frame, text='Initialize DBs', command=lambda: self.init_dbs(source_db_connector, source_frame, destination_frame))
         self.init_button.grid(row=1, column=0)
         self.source_structure_changes_button = ttk.Button(self.frame, text='Get source DB changes', command=lambda: self.source_structure_changes(source_db_connector, profile_frame, source_frame, destination_frame, result_frame))
@@ -578,10 +576,11 @@ class ResultFrame:
         self.result_text.pack()
         self.generate_script_button = ttk.Button(self.frame, text='Generate script', command=lambda:self.ddl_script_to_file())
         self.generate_script_button.pack()
-        self.deploy_button = ttk.Button(self.frame, text='Deploy changes to database')#, command=lambda:self.deploy_to_database(destination_db_connector))
+        self.deploy_button = ttk.Button(self.frame, text='Deploy changes to database')
         self.deploy_button.pack()
         self.ddl_script = ''
-        self.frame.bind('<Map>', lambda event: self.generate_ddl_script(destination_db_connector, destination_frame))
+        self.frame.bind('<Map>', lambda event: self.generate_ddl_script(destination_db_connector, destination_frame), add='+')
+        self.frame.bind('<Map>', lambda event: self.show_structure_changes(), add='+')
 
     def generate_ddl_script(self, destination_db_connector, destination_frame):
         destination_db_connector.connect_to_db(destination_frame.db_dropdown.get(),
@@ -600,7 +599,7 @@ class ResultFrame:
                         self.ddl_script += f'CREATE SCHEMA {row[1]};\n\n'
                     elif row[8] == 'IT':
                         self.ddl_script += f'CREATE TABLE {row[1]}.{row[3]}();\n\n'
-                    elif row[8] == 'IC' or row[-1] == 'UC':
+                    elif row[8] == 'IC' or row[8] == 'UC':
                         self.ddl_script += f'ALTER TABLE {row[1]}.{row[3]}\n' \
                                       f'ADD {row[5]} {row[7]};\n\n'
                     elif row[8] == 'US':
@@ -622,12 +621,40 @@ class ResultFrame:
             print(self.ddl_script)
 
         else:
-            print('no changes')
+            print('No changes')
+
+    def show_structure_changes(self):
+        if SharedData.structure_changes:
+            # configure tags for text styling
+            self.result_text.tag_config('headline', font=(None, 9, 'bold'))
+            self.result_text.tag_config('new', foreground='green')
+            self.result_text.tag_config('altered', foreground='blue')
+            self.result_text.tag_config('deleted', foreground='red')
+
+            self.result_text.insert(tk.END, '### Schema changes ###\n', 'headline')
+            for row in SharedData.structure_changes:
+                if row[8] == 'IS': self.result_text.insert(tk.END, f'- NEW schema "{row[1]}"\n', 'new')
+                elif row[8] == 'US': self.result_text.insert(tk.END, f'- RENAMED schema "{row[0]}" to "{row[1]}"\n', 'altered')
+                elif row[8] == 'DS': self.result_text.insert(tk.END, f'- DELETED schema "{row[0]}"\n', 'deleted')
+
+            self.result_text.insert(tk.END, '\n### Table changes ###\n', 'headline')
+            for row in SharedData.structure_changes:
+                if row[8] == 'IT': self.result_text.insert(tk.END, f'- NEW table "{row[1]}.{row[3]}"\n', 'new')
+                elif row[8] == 'UT': self.result_text.insert(tk.END, f'- RENAMED table "{row[1]}.{row[2]}" to "{row[1]}.{row[3]}"\n', 'altered')
+                elif row[8] == 'DT': self.result_text.insert(tk.END, f'- DELETED table "{row[0]}.{row[2]}"\n', 'deleted')
+
+            self.result_text.insert(tk.END, '\n### Column changes ###\n', 'headline')
+            for row in SharedData.structure_changes:
+                if row[8] == 'IC' or row[8] == 'UC': self.result_text.insert(tk.END, f'- NEW or RENAMED column "{row[1]}.{row[3]}.{row[5]} ({row[7]})"\n', 'new')
+                elif row[8] == 'UD': self.result_text.insert(tk.END, f'- CHANGED column "{row[1]}.{row[3]}.{row[4]}" data type from "{row[6]}" to "{row[7]}"\n', 'altered')
+
+        else:
+            self.result_text.insert(tk.END, '### No changes ###')
 
     def ddl_script_to_file(self):
         try:
             if not self.ddl_script.strip():
-                messagebox.showinfo('DDL Script Generation', 'Nothing to create ;)')
+                messagebox.showinfo('DDL Script Generation', 'Nothing to create')
             else:
                 filetypes = [('SQL files', '*.sql')]
                 with filedialog.asksaveasfile(title='Save profile', initialdir=dev_profiles_dir, filetypes=filetypes, defaultextension='.json') as file:
@@ -635,22 +662,22 @@ class ResultFrame:
                 # messagebox.showinfo('DDL Script Generation', 'DDL script generated sucessfully :)')
 
         except Exception:
-            messagebox.showerror('DDL Script Generation', 'DDL script generation failed :(')
+            messagebox.showerror('DDL Script Generation', 'DDL script generation failed')
             traceback.print_exc()
 
     def deploy_to_database(self, destination_db_connector):
         try:
             if not self.ddl_script.strip():
-                messagebox.showinfo('DDL Script Deployment', 'Nothing to deploy ;)')
+                messagebox.showinfo('DDL Script Deployment', 'Nothing to deploy')
             else:
                 mb_answer = messagebox.askquestion('Deploy structure changes', f'Deploy structure changes to {destination_db_connector.host}/{destination_db_connector.database} ?')
                 if mb_answer == 'yes':
-                    for statement in self.ddl_script.split(';'):    # need for multi statements
+                    for statement in self.ddl_script.split(';'):    # needed for multi statements
                         if statement: destination_db_connector.execute_statement(f'{statement};')
-                    messagebox.showinfo('DDL Script Deployment', 'DDL script deployment sucessfully :)')
+                    messagebox.showinfo('DDL Script Deployment', 'DDL script deployment sucessfully')
 
         except Exception:
-            messagebox.showerror('DDl Script Deployment', 'DDL script deployment failed :(')
+            messagebox.showerror('DDl Script Deployment', 'DDL script deployment failed')
             traceback.print_exc()
 
 
